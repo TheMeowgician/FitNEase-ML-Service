@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  fitnease-ml:
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=True
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./:/app
+      - ./models_pkl:/app/models_pkl
+    command: ["python", "app.py"]
+
+  fitnease-ml-db:
+    ports:
+      - "3316:3306"
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
