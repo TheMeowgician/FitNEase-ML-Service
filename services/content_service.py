@@ -45,20 +45,32 @@ class ContentService(BaseService):
         Endpoint: GET /api/content/exercise-attributes
         """
         try:
+            # Directly use ML internal endpoint for now (no auth required)
+            logger.info("Using ML internal endpoint for exercise data...")
+            response = self.get('/api/ml-internal/exercise-attributes')
+
+            if self.validate_response(response):
+                exercises_data = response.get('exercises', [])
+                logger.info(f"Successfully got {len(exercises_data)} exercises from ML internal endpoint")
+                return exercises_data
+
+            # Fallback: try with authentication if internal endpoint fails
+            logger.warning("ML internal endpoint failed, trying authenticated request...")
             headers = {'Authorization': f'Bearer {token}'}
             response = self.get('/api/content/exercise-attributes', headers=headers)
 
             if self.validate_response(response):
                 exercises = response.get('exercises', [])
+                logger.info(f"Successfully got {len(exercises)} exercises from content service")
                 return exercises
 
-            # Fallback: return mock exercise data
-            logger.warning("Content service unavailable, using mock exercise data")
-            return self._get_mock_exercises()
+            # Final fallback: return mock exercise data with real names
+            logger.warning("Content service unavailable, using enhanced mock exercise data")
+            return self._get_enhanced_mock_exercises()
 
         except Exception as e:
             logger.error(f"Error getting exercise attributes with token: {e}")
-            return self._get_mock_exercises()
+            return self._get_enhanced_mock_exercises()
 
     def get_all_exercises(self) -> Optional[List[Dict]]:
         """
