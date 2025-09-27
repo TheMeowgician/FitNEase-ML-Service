@@ -39,6 +39,27 @@ class ContentService(BaseService):
             logger.error(f"Error getting exercise attributes: {e}")
             return self._get_mock_exercises()
 
+    def get_exercise_attributes_with_token(self, token: str) -> Optional[List[Dict]]:
+        """
+        Get exercise features for Content-Based filtering with authentication
+        Endpoint: GET /api/content/exercise-attributes
+        """
+        try:
+            headers = {'Authorization': f'Bearer {token}'}
+            response = self.get('/api/content/exercise-attributes', headers=headers)
+
+            if self.validate_response(response):
+                exercises = response.get('exercises', [])
+                return exercises
+
+            # Fallback: return mock exercise data
+            logger.warning("Content service unavailable, using mock exercise data")
+            return self._get_mock_exercises()
+
+        except Exception as e:
+            logger.error(f"Error getting exercise attributes with token: {e}")
+            return self._get_mock_exercises()
+
     def get_all_exercises(self) -> Optional[List[Dict]]:
         """
         Get bulk exercise data for Content-Based model training

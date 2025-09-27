@@ -60,21 +60,32 @@ class ContentBasedController:
         """Get content-based recommendations for user"""
         try:
             num_recommendations = data.get('num_recommendations', 10) if data else 10
+            auth_token = data.get('auth_token') if data else None
 
             # Get content-based model
             content_model = current_app.model_manager.get_content_based_model()
             if not content_model:
                 return {'error': 'Content-based model not available'}, 503
 
-            # Get user preferences from auth service
-            user_data = self.auth_service.get_user_profile(user_id)
+            # Get user preferences from auth service (with token)
+            user_data = None
+            if auth_token:
+                user_data = self.auth_service.get_user_profile_with_token(user_id, auth_token)
+
             if not user_data:
-                return {'error': 'User not found'}, 404
+                # Fallback: use basic user preferences
+                user_data = {'preferences': {}}
+
+            # Get exercise data from content service (with token)
+            exercise_data = None
+            if auth_token:
+                exercise_data = self.content_service.get_exercise_attributes_with_token(auth_token)
 
             # Get user-based recommendations
             recommendations = content_model.get_user_recommendations(
                 user_preferences=user_data.get('preferences', {}),
-                num_recommendations=num_recommendations
+                num_recommendations=num_recommendations,
+                exercise_data=exercise_data
             )
 
             # Save recommendations to database

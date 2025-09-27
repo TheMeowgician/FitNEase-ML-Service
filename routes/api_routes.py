@@ -49,8 +49,16 @@ def content_similarity():
 def content_recommendations(user_id):
     """Content-based recommendations for user"""
     try:
+        # Extract Bearer token from request
+        auth_token = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            auth_token = auth_header[7:]  # Remove 'Bearer ' prefix
+            logger.info(f"ML service received Bearer token: {auth_token[:20]}..." if auth_token else "No token received")
+
         data = request.args.to_dict()
         data['num_recommendations'] = int(data.get('num_recommendations', 10))
+        data['auth_token'] = auth_token  # Pass token to controller
 
         result = content_controller.get_user_recommendations(user_id, data)
 
@@ -130,6 +138,12 @@ def collaborative_recommendations(user_id):
 def hybrid_recommendations(user_id):
     """Main hybrid recommendations endpoint (PRIMARY ENDPOINT)"""
     try:
+        # Extract Bearer token from request
+        auth_token = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            auth_token = auth_header[7:]  # Remove 'Bearer ' prefix
+
         data = request.args.to_dict()
         # Convert numeric parameters
         if 'num_recommendations' in data:
@@ -138,6 +152,8 @@ def hybrid_recommendations(user_id):
             data['content_weight'] = float(data['content_weight'])
         if 'collaborative_weight' in data:
             data['collaborative_weight'] = float(data['collaborative_weight'])
+
+        data['auth_token'] = auth_token  # Pass token to controller
 
         result = hybrid_controller.get_recommendations(user_id, data)
 

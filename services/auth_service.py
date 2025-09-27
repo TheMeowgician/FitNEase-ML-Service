@@ -38,6 +38,26 @@ class AuthService(BaseService):
             logger.error(f"Error getting user profile for user {user_id}: {e}")
             return self._get_mock_user_profile(user_id)
 
+    def get_user_profile_with_token(self, user_id: int, token: str) -> Optional[Dict]:
+        """
+        Get user profile with authentication token
+        Endpoint: GET /auth/user-profile/{user_id}
+        """
+        try:
+            headers = {'Authorization': f'Bearer {token}'}
+            response = self.get(f'/api/auth/user-profile/{user_id}', headers=headers)
+
+            if self.validate_response(response):
+                return response
+
+            # Fallback: return mock user data
+            logger.warning(f"Auth service unavailable, using mock data for user {user_id}")
+            return self._get_mock_user_profile(user_id)
+
+        except Exception as e:
+            logger.error(f"Error getting user profile for user {user_id}: {e}")
+            return self._get_mock_user_profile(user_id)
+
     def validate_token(self, token: str) -> Optional[Dict]:
         """
         Validate authentication token
