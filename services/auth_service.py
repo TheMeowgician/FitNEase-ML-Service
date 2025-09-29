@@ -41,11 +41,12 @@ class AuthService(BaseService):
     def get_user_profile_with_token(self, user_id: int, token: str) -> Optional[Dict]:
         """
         Get user profile with authentication token
-        Endpoint: GET /auth/user-profile/{user_id}
+        Endpoint: GET /api/auth/auth/user-profile/{user_id}
+        Returns: User profile with preferences for ML personalization
         """
         try:
             headers = {'Authorization': f'Bearer {token}'}
-            response = self.get(f'/api/auth/user-profile/{user_id}', headers=headers)
+            response = self.get(f'/api/auth/auth/user-profile/{user_id}', headers=headers)
 
             if self.validate_response(response):
                 return response

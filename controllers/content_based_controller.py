@@ -1,54 +1,54 @@
 """
 Content-Based Filtering Controller
-Handles content-based recommendation logic and exercise similarity calculations
+=================================
+
+Controller for content-based recommendation operations
 """
 
 import logging
 from typing import Dict, List, Optional
 from flask import current_app
 
+from models.database_models import ContentBasedScores, Recommendations
 from services.auth_service import AuthService
 from services.content_service import ContentService
-from models.database_models import Recommendations
 
 logger = logging.getLogger(__name__)
 
-
 class ContentBasedController:
-    """Controller for content-based recommendation operations"""
+    """Controller for content-based filtering operations"""
 
     def __init__(self):
-        """Initialize content-based controller with required services"""
         self.auth_service = AuthService()
         self.content_service = ContentService()
 
-    def get_content_similarity(self, data: Dict) -> Dict:
-        """Calculate content similarity between exercises"""
+    def calculate_similarity(self, data: Dict) -> Dict:
+        """Calculate exercise similarity scores"""
         try:
-            exercise1_name = data.get('exercise1_name')
-            exercise2_name = data.get('exercise2_name')
+            exercise_name = data.get('exercise_name')
+            num_recommendations = data.get('num_recommendations', 10)
             similarity_metric = data.get('similarity_metric', 'cosine')
 
-            if not exercise1_name or not exercise2_name:
-                return {'error': 'Both exercise1_name and exercise2_name are required'}, 400
+            if not exercise_name:
+                return {'error': 'exercise_name is required'}, 400
 
             # Get content-based model
             content_model = current_app.model_manager.get_content_based_model()
             if not content_model:
                 return {'error': 'Content-based model not available'}, 503
 
-            # Calculate similarity
-            similarity_score = content_model.calculate_similarity(
-                exercise1_name=exercise1_name,
-                exercise2_name=exercise2_name,
+            # Get recommendations
+            recommendations = content_model.get_recommendations(
+                exercise_name=exercise_name,
+                num_recommendations=num_recommendations,
                 similarity_metric=similarity_metric
             )
 
             return {
                 'status': 'success',
-                'exercise1_name': exercise1_name,
-                'exercise2_name': exercise2_name,
-                'similarity_score': similarity_score,
+                'exercise_name': exercise_name,
+                'recommendations': recommendations,
+                'count': len(recommendations),
                 'similarity_metric': similarity_metric
             }
 
@@ -76,67 +76,44 @@ class ContentBasedController:
                 # Fallback: use basic user preferences
                 user_data = {'preferences': {}}
 
+            # Note: Exercise data will be loaded by the ML model directly when needed
+
             # Get real exercise data from content service
+            logger.info("Getting real exercise data from content service...")
             exercise_data = None
             if auth_token:
                 exercise_data = self.content_service.get_exercise_attributes_with_token(auth_token)
 
-            # Get user-based recommendations
-            recommendations = content_model.get_user_recommendations(
-                user_preferences=user_data.get('preferences', {}),
-                num_recommendations=num_recommendations
-            )
-
-            # If we have real exercise data, replace mock recommendations with real ones
             if exercise_data and len(exercise_data) > 0:
-                logger.info(f"Using real exercise data: {len(exercise_data)} exercises")
-                # Replace mock recommendations with real exercise data
-                real_recommendations = []
-                for i, rec in enumerate(recommendations[:num_recommendations]):
-                    if i < len(exercise_data):
-                        real_exercise = exercise_data[i]
-                        # Map database difficulty levels properly: 0=beginner, 1=medium, 2=advanced
-                        db_difficulty = real_exercise.get('difficulty_level', 0)
-                        if db_difficulty == 0:
-                            difficulty_name = 'beginner'
-                            difficulty_num = 1
-                        elif db_difficulty == 1:
-                            difficulty_name = 'medium'
-                            difficulty_num = 2
-                        else:
-                            difficulty_name = 'advanced'
-                            difficulty_num = 3
+                # Use REAL exercise data from database for recommendations
+                logger.info(f"Using REAL exercise data: {len(exercise_data)} exercises from database")
 
-                        real_rec = {
-                            'exercise_id': real_exercise.get('exercise_id', i + 1),
-                            'exercise_name': real_exercise.get('exercise_name', f'Exercise {i + 1}'),
-                            'target_muscle_group': real_exercise.get('target_muscle_group', 'core'),
-                            'difficulty_level': difficulty_num,
-                            'difficulty_name': difficulty_name,
-                            'duration_seconds': real_exercise.get('default_duration_seconds', 20),
-                            'calories_per_minute': real_exercise.get('estimated_calories_burned', 2),
-                            'equipment_needed': real_exercise.get('equipment_needed', 'bodyweight'),
-                            'exercise_category': real_exercise.get('exercise_category', 'tabata'),
-                            'recommendation_type': 'content_based_user',
-                            'preference_score': rec.get('preference_score', 0.8)
-                        }
-                        real_recommendations.append(real_rec)
-                    else:
-                        real_recommendations.append(rec)
-                recommendations = real_recommendations
-                logger.info(f"Replaced with {len(real_recommendations)} real exercise recommendations")
+                # Extract and format user preferences from real user data
+                real_preferences = self._extract_user_preferences(user_data)
+                logger.info(f"Using real user preferences: {real_preferences}")
+
+                recommendations = self._generate_content_based_recommendations(
+                    exercise_data, real_preferences, num_recommendations
+                )
             else:
-                logger.warning("No real exercise data available, using model defaults")
+                # Fallback to mock recommendations
+                logger.warning("No real exercise data available, using mock recommendations")
+                recommendations = self._generate_mock_recommendations(num_recommendations)
 
             # Transform recommendations to match client interface
             transformed_recommendations = []
             for rec in recommendations:
-                # Calculate calories for a full Tabata round (8 rounds × 20 seconds = 160 seconds total)
-                single_round_duration = rec.get('duration_seconds', 20)
-                tabata_total_duration = single_round_duration * 8  # 8 rounds typical for Tabata
-                duration_minutes = tabata_total_duration / 60
-                calories_per_minute = rec.get('calories_per_minute', 5)
-                estimated_calories = calories_per_minute * duration_minutes
+                # Format muscle group name properly (remove underscores, capitalize)
+                muscle_group_raw = rec.get('target_muscle_group', 'core')
+                muscle_group_formatted = muscle_group_raw.replace('_', ' ').title()
+
+                # Use correct field names from the recommendation data
+                duration_seconds = rec.get('default_duration_seconds', rec.get('duration_seconds', 20))
+                calories_per_minute = rec.get('calories_burned_per_minute', rec.get('calories_per_minute', 4))
+
+                # Calculate total calories for a full Tabata round (8 rounds × 20 seconds = 160 seconds total)
+                tabata_total_duration = duration_seconds * 8  # 8 rounds typical for Tabata
+                estimated_calories = calories_per_minute * (tabata_total_duration / 60)
 
                 transformed_rec = {
                     'workout_id': rec.get('exercise_id', 1),
@@ -146,10 +123,10 @@ class ContentBasedController:
                     'content_based_score': rec.get('preference_score', 0.8),
                     'collaborative_score': 0.0,
                     'algorithm_used': 'content_based',
-                    'recommendation_reason': f"Content-based recommendation for {rec.get('target_muscle_group', 'fitness')} exercises",
+                    'recommendation_reason': f"Content-based recommendation for {muscle_group_formatted} exercises",
                     'difficulty_level': rec.get('difficulty_level', 1),
-                    'target_muscle_group': rec.get('target_muscle_group', 'core'),
-                    'default_duration_seconds': rec.get('duration_seconds', 20),
+                    'target_muscle_group': muscle_group_formatted,
+                    'default_duration_seconds': duration_seconds,
                     'estimated_calories_burned': round(estimated_calories, 1),
                     'equipment_needed': rec.get('equipment_needed', 'bodyweight'),
                     'exercise_category': rec.get('exercise_category', 'tabata')
@@ -187,16 +164,14 @@ class ContentBasedController:
                 return {'error': 'Content-based model not available'}, 503
 
             # Calculate similarity
-            similarity_score = content_model.calculate_similarity(
-                exercise1_name=exercise1_name,
-                exercise2_name=exercise2_name,
-                similarity_metric=similarity_metric
+            similarity_score = content_model.calculate_exercise_similarity(
+                exercise1_name, exercise2_name, similarity_metric
             )
 
             return {
                 'status': 'success',
-                'exercise1_name': exercise1_name,
-                'exercise2_name': exercise2_name,
+                'exercise1': exercise1_name,
+                'exercise2': exercise2_name,
                 'similarity_score': similarity_score,
                 'similarity_metric': similarity_metric
             }
@@ -206,10 +181,10 @@ class ContentBasedController:
             return {'error': str(e)}, 500
 
     def get_similar_exercises(self, data: Dict) -> Dict:
-        """Get similar exercises based on exercise name"""
+        """Get exercises similar to given exercise above threshold"""
         try:
             exercise_name = data.get('exercise_name')
-            threshold = float(data.get('threshold', 0.7))
+            threshold = data.get('threshold', 0.7)
             similarity_metric = data.get('similarity_metric', 'cosine')
 
             if not exercise_name:
@@ -248,18 +223,16 @@ class ContentBasedController:
                 return {
                     'status': 'unhealthy',
                     'error': 'Content-based model not loaded'
-                }
+                }, 503
 
-            # Check if model is fitted and ready
-            model_info = {
-                'status': 'healthy',
-                'model_type': 'content_based',
-                'is_fitted': hasattr(content_model, 'is_fitted') and content_model.is_fitted,
-                'features_count': getattr(content_model, 'n_features_', 0),
-                'recommendations_generated': getattr(content_model, 'recommendations_count_', 0)
+            health_status = content_model.health_check()
+            model_info = content_model.get_model_info()
+
+            return {
+                'status': 'success',
+                'health': health_status,
+                'model_info': model_info
             }
-
-            return model_info
 
         except Exception as e:
             logger.error(f"Content-based model health check error: {e}")
@@ -286,8 +259,169 @@ class ContentBasedController:
                 )
                 recommendation.save()
 
-            logger.info(f"Successfully saved {len(recommendations)} {algorithm} recommendations for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save content-based recommendations: {e}")
+
+    def _save_content_scores(self, user_id: int, exercise_id: int, similarity_score: float, feature_vector: Dict):
+        """Save content-based scores to database"""
+        try:
+            content_score = ContentBasedScores(
+                user_id=user_id,
+                exercise_id=exercise_id,
+                similarity_score=similarity_score,
+                feature_vector=feature_vector
+            )
+            content_score.save()
 
         except Exception as e:
-            logger.error(f"Error saving recommendations: {e}")
-            # Don't raise exception, just log - recommendations can still be returned
+            logger.warning(f"Failed to save content-based score: {e}")
+    def _generate_mock_recommendations(self, num_recommendations: int) -> List[Dict]:
+        """Generate mock recommendations when trained model is not available"""
+        mock_recommendations = []
+
+        for i in range(num_recommendations):
+            mock_rec = {
+                "exercise_id": 100 + i,
+                "exercise_name": f"Recommended Exercise {i + 1}",
+                "target_muscle_group": "core",
+                "difficulty_level": 2,
+                "equipment_needed": "bodyweight",
+                "exercise_category": "strength",
+                "calories_burned_per_minute": 4.0,
+                "default_duration_seconds": 30,
+                "preference_score": 0.8,
+                "instructions": f"This is a mock exercise recommendation {i + 1}"
+            }
+            mock_recommendations.append(mock_rec)
+
+        return mock_recommendations
+
+    def _generate_content_based_recommendations(self, exercise_data: List[Dict], user_preferences: Dict, num_recommendations: int) -> List[Dict]:
+        """Generate content-based recommendations using real exercise data"""
+
+        # Simple content-based filtering logic using exercise attributes
+        # Score exercises based on user preferences (if any) or use variety
+
+        # Default preferences if none provided
+        preferred_muscle_groups = user_preferences.get('muscle_groups', ['core', 'upper_body', 'lower_body'])
+        preferred_difficulty = user_preferences.get('difficulty', 2)  # Medium difficulty
+        preferred_equipment = user_preferences.get('equipment', ['bodyweight'])
+
+        scored_exercises = []
+
+        for exercise in exercise_data:
+            score = 0.0
+
+            # Muscle group preference (40% weight)
+            if exercise.get('target_muscle_group') in preferred_muscle_groups:
+                score += 0.4
+            else:
+                score += 0.1  # Small base score for variety
+
+            # Difficulty preference (30% weight)
+            # Convert text difficulty to numeric for comparison
+            exercise_difficulty_text = exercise.get('difficulty_level', 'medium')
+            difficulty_map = {'beginner': 1, 'medium': 2, 'expert': 3}
+            exercise_difficulty = difficulty_map.get(exercise_difficulty_text, 2)
+
+            difficulty_diff = abs(exercise_difficulty - preferred_difficulty)
+            if difficulty_diff == 0:
+                score += 0.3
+            elif difficulty_diff == 1:
+                score += 0.2
+            else:
+                score += 0.1
+
+            # Equipment preference (20% weight)
+            if exercise.get('equipment_needed') in preferred_equipment:
+                score += 0.2
+            elif exercise.get('equipment_needed') == 'bodyweight':
+                score += 0.15  # Bodyweight always accessible
+            else:
+                score += 0.05
+
+            # Calorie efficiency (10% weight)
+            calories = exercise.get('estimated_calories_burned', 1)
+            calorie_score = min(0.1, calories / 50)  # Normalize calories
+            score += calorie_score
+
+            # The content service returns 'estimated_calories_burned' which is total calories for the duration
+            # We need to convert it back to calories per minute for consistency
+            estimated_total_calories = exercise.get('estimated_calories_burned', 1.33)
+            duration_seconds = exercise.get('default_duration_seconds', 20)
+            calories_per_minute = estimated_total_calories / (duration_seconds / 60) if duration_seconds > 0 else 4
+
+            scored_exercises.append({
+                'exercise_id': exercise.get('exercise_id'),
+                'exercise_name': exercise.get('exercise_name'),
+                'target_muscle_group': exercise.get('target_muscle_group'),
+                'difficulty_level': exercise_difficulty_text,  # Keep original text value
+                'difficulty_level_numeric': exercise_difficulty,  # Add numeric for reference
+                'equipment_needed': exercise.get('equipment_needed'),
+                'exercise_category': exercise.get('exercise_category', 'strength'),
+                'calories_burned_per_minute': calories_per_minute,
+                'default_duration_seconds': duration_seconds,
+                'preference_score': score,
+                'recommendation_reason': f"Content-based match for {exercise.get('target_muscle_group', 'fitness')} training"
+            })
+
+        # Sort by score and return top recommendations
+        scored_exercises.sort(key=lambda x: x['preference_score'], reverse=True)
+
+        # Add some randomization to avoid always same recommendations
+        import random
+        random.seed(42)  # Consistent randomization
+
+        # Take top candidates and shuffle slightly for variety
+        top_candidates = scored_exercises[:num_recommendations * 2] if len(scored_exercises) > num_recommendations * 2 else scored_exercises
+        random.shuffle(top_candidates)
+
+        return top_candidates[:num_recommendations]
+
+    def _extract_user_preferences(self, user_data: Dict) -> Dict:
+        """Extract and format user preferences from real auth service user data"""
+        if not user_data:
+            return {}
+
+        # Map real user data fields to expected preference format
+        preferences = {}
+
+        # Extract muscle groups from target_muscle_groups (array field)
+        target_muscle_groups = user_data.get('target_muscle_groups', [])
+        if target_muscle_groups and isinstance(target_muscle_groups, list) and len(target_muscle_groups) > 0:
+            preferences['muscle_groups'] = target_muscle_groups
+        else:
+            preferences['muscle_groups'] = ['core', 'upper_body', 'lower_body']  # Default variety
+
+        # Map fitness_level to difficulty preference (1-3 scale)
+        fitness_level = user_data.get('fitness_level', 'intermediate')
+        difficulty_map = {
+            'beginner': 1,
+            'intermediate': 2,
+            'advanced': 3,
+            'expert': 3
+        }
+        preferences['difficulty'] = difficulty_map.get(fitness_level, 2)
+
+        # Extract equipment from available_equipment (array field)
+        available_equipment = user_data.get('available_equipment', [])
+        if available_equipment and isinstance(available_equipment, list) and len(available_equipment) > 0:
+            preferences['equipment'] = available_equipment
+        else:
+            preferences['equipment'] = ['bodyweight']  # Default to bodyweight
+
+        # Extract additional preferences for enhanced personalization
+        preferences['age'] = user_data.get('age', 25)
+        preferences['experience_years'] = user_data.get('workout_experience_years', 1)
+        preferences['time_constraints'] = user_data.get('time_constraints_minutes', 30)
+
+        # Handle fitness_goals (array field)
+        fitness_goals = user_data.get('fitness_goals', [])
+        if fitness_goals and isinstance(fitness_goals, list) and len(fitness_goals) > 0:
+            preferences['fitness_goals'] = fitness_goals
+        else:
+            preferences['fitness_goals'] = ['general_fitness']
+
+        preferences['activity_level'] = user_data.get('activity_level', 'moderate')
+
+        return preferences

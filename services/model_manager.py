@@ -48,18 +48,28 @@ class ModelManager:
                 try:
                     with open(content_model_path, 'rb') as f:
                         content_model_data = pickle.load(f)
-                    # The pickle file contains the complete model, use it directly
-                    self.content_model = ContentBasedRecommender()
-                    self.content_model.set_model_data(content_model_data)
+                    # The pickle contains a complete trained model with components
+                    if isinstance(content_model_data, dict) and 'content_based_recommender' in content_model_data:
+                        # It's the combined model from notebook (has feature_engineer + recommender)
+                        self.content_model = content_model_data['content_based_recommender']
+                        logger.info("Loaded trained content-based recommender from combined model")
+                    elif hasattr(content_model_data, 'get_user_based_recommendations'):
+                        # It's already a trained model object
+                        self.content_model = content_model_data
+                        logger.info("Loaded pre-trained content-based model object")
+                    else:
+                        # Fallback: create new model but this means no training data
+                        self.content_model = FitNeaseContentBasedRecommender()
+                        logger.warning("Using fallback content-based model - no training data available")
                     logger.info("Content-based model loaded successfully")
                 except Exception as e:
                     logger.error(f"Failed to load content-based model: {e}")
                     # Create fallback content-based model
-                    self.content_model = ContentBasedRecommender()
+                    self.content_model = FitNeaseContentBasedRecommender()
                     logger.info("Content-based model fallback initialized")
             else:
                 # Create fallback content-based model if file doesn't exist
-                self.content_model = ContentBasedRecommender()
+                self.content_model = FitNeaseContentBasedRecommender()
                 logger.info("Content-based model fallback initialized")
 
             # Load Collaborative Model (placeholder)
@@ -87,9 +97,19 @@ class ModelManager:
                 try:
                     with open(hybrid_model_path, 'rb') as f:
                         hybrid_model_data = pickle.load(f)
-                    # The pickle file contains the complete hybrid model
-                    self.hybrid_model = HybridRecommender()
-                    self.hybrid_model.set_model_data(hybrid_model_data)
+                    # The pickle contains a complete trained hybrid model
+                    if isinstance(hybrid_model_data, dict) and 'recommender' in hybrid_model_data:
+                        # It's the complete hybrid model from notebook
+                        self.hybrid_model = hybrid_model_data['recommender']
+                        logger.info("Loaded trained hybrid recommender from complete model")
+                    elif hasattr(hybrid_model_data, 'get_hybrid_recommendations'):
+                        # It's already a trained hybrid model object
+                        self.hybrid_model = hybrid_model_data
+                        logger.info("Loaded pre-trained hybrid model object")
+                    else:
+                        # Fallback: create new model but this means no training data
+                        self.hybrid_model = HybridRecommender()
+                        logger.warning("Using fallback hybrid model - no training data available")
                     logger.info("Hybrid model loaded successfully")
                 except Exception as e:
                     logger.error(f"Failed to load hybrid model: {e}")
