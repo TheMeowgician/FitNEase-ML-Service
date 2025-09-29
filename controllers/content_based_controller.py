@@ -376,9 +376,9 @@ class ContentBasedController:
         # Sort by score and return top recommendations
         scored_exercises.sort(key=lambda x: x['preference_score'], reverse=True)
 
-        # Add some randomization to avoid always same recommendations
+        # Add some randomization to provide variety while maintaining personalization
         import random
-        random.seed(42)  # Consistent randomization
+        random.seed()  # Use current time as seed for true variety on refresh
 
         # Take top candidates and shuffle slightly for variety
         top_candidates = scored_exercises[:num_recommendations * 2] if len(scored_exercises) > num_recommendations * 2 else scored_exercises
