@@ -73,8 +73,18 @@ class ContentBasedController:
                 user_data = self.auth_service.get_user_profile_with_token(user_id, auth_token)
 
             if not user_data:
-                # Fallback: use basic user preferences
-                user_data = {'preferences': {}}
+                # Use default preferences instead of mock data
+                logger.warning(f"Auth service unavailable for user {user_id}, using default preferences")
+                user_data = {
+                    'target_muscle_groups': ['core', 'upper_body', 'lower_body'],
+                    'fitness_level': 'intermediate',
+                    'available_equipment': ['bodyweight'],
+                    'fitness_goals': ['general_fitness'],
+                    'age': 25,
+                    'workout_experience_years': 1,
+                    'time_constraints_minutes': 30,
+                    'activity_level': 'moderate'
+                }
 
             # Note: Exercise data will be loaded by the ML model directly when needed
 
@@ -96,9 +106,9 @@ class ContentBasedController:
                     exercise_data, real_preferences, num_recommendations
                 )
             else:
-                # Fallback to mock recommendations
-                logger.warning("No real exercise data available, using mock recommendations")
-                recommendations = self._generate_mock_recommendations(num_recommendations)
+                # No exercise data available - return error instead of mock data
+                logger.error("No real exercise data available from content service")
+                return {'error': 'Exercise data unavailable', 'recommendations': []}, 503
 
             # Transform recommendations to match client interface
             transformed_recommendations = []
@@ -109,11 +119,10 @@ class ContentBasedController:
 
                 # Use correct field names from the recommendation data
                 duration_seconds = rec.get('default_duration_seconds', rec.get('duration_seconds', 20))
-                calories_per_minute = rec.get('calories_burned_per_minute', rec.get('calories_per_minute', 4))
 
-                # Calculate total calories for a full Tabata round (8 rounds × 20 seconds = 160 seconds total)
-                tabata_total_duration = duration_seconds * 8  # 8 rounds typical for Tabata
-                estimated_calories = calories_per_minute * (tabata_total_duration / 60)
+                # Use the estimated calories for the single exercise duration (already calculated correctly)
+                # This is calories burned for one exercise interval, not full Tabata workout
+                estimated_calories = rec.get('estimated_calories_burned', 2.0)
 
                 transformed_rec = {
                     'workout_id': rec.get('exercise_id', 1),
@@ -321,7 +330,7 @@ class ContentBasedController:
             # Difficulty preference (30% weight)
             # Convert text difficulty to numeric for comparison
             exercise_difficulty_text = exercise.get('difficulty_level', 'medium')
-            difficulty_map = {'beginner': 1, 'medium': 2, 'expert': 3}
+            difficulty_map = {'beginner': 1, 'medium': 2, 'advanced': 3, 'expert': 3, 'intermediate': 2}
             exercise_difficulty = difficulty_map.get(exercise_difficulty_text, 2)
 
             difficulty_diff = abs(exercise_difficulty - preferred_difficulty)
@@ -345,21 +354,20 @@ class ContentBasedController:
             calorie_score = min(0.1, calories / 50)  # Normalize calories
             score += calorie_score
 
-            # The content service returns 'estimated_calories_burned' which is total calories for the duration
-            # We need to convert it back to calories per minute for consistency
-            estimated_total_calories = exercise.get('estimated_calories_burned', 1.33)
+            # Use the estimated_calories_burned directly for the single exercise duration
+            # This is already calculated correctly by the content service
+            estimated_total_calories = exercise.get('estimated_calories_burned', 2.0)
             duration_seconds = exercise.get('default_duration_seconds', 20)
-            calories_per_minute = estimated_total_calories / (duration_seconds / 60) if duration_seconds > 0 else 4
 
             scored_exercises.append({
                 'exercise_id': exercise.get('exercise_id'),
                 'exercise_name': exercise.get('exercise_name'),
                 'target_muscle_group': exercise.get('target_muscle_group'),
-                'difficulty_level': exercise_difficulty_text,  # Keep original text value
-                'difficulty_level_numeric': exercise_difficulty,  # Add numeric for reference
+                'difficulty_level': exercise_difficulty,  # Use numeric value for mobile app compatibility
+                'difficulty_level_text': exercise_difficulty_text,  # Keep original text for reference
                 'equipment_needed': exercise.get('equipment_needed'),
                 'exercise_category': exercise.get('exercise_category', 'strength'),
-                'calories_burned_per_minute': calories_per_minute,
+                'estimated_calories_burned': estimated_total_calories,  # Include the correct calories value
                 'default_duration_seconds': duration_seconds,
                 'preference_score': score,
                 'recommendation_reason': f"Content-based match for {exercise.get('target_muscle_group', 'fitness')} training"

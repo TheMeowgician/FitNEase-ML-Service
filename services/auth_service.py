@@ -46,18 +46,18 @@ class AuthService(BaseService):
         """
         try:
             headers = {'Authorization': f'Bearer {token}'}
-            response = self.get(f'/api/auth/auth/user-profile/{user_id}', headers=headers)
+            response = self.get(f'/api/auth/user-profile/{user_id}', headers=headers)
 
             if self.validate_response(response):
                 return response
 
-            # Fallback: return mock user data
-            logger.warning(f"Auth service unavailable, using mock data for user {user_id}")
-            return self._get_mock_user_profile(user_id)
+            # Auth service failed - return None to use defaults
+            logger.warning(f"Auth service unavailable for user {user_id}, status: {response.get('status', 'unknown') if isinstance(response, dict) else 'error'}")
+            return None
 
         except Exception as e:
             logger.error(f"Error getting user profile for user {user_id}: {e}")
-            return self._get_mock_user_profile(user_id)
+            return None
 
     def validate_token(self, token: str) -> Optional[Dict]:
         """
