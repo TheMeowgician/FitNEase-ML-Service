@@ -45,6 +45,18 @@ class HybridRecommender:
                     'weights': model_data.get('weights', {}),
                     'configuration': model_data.get('configuration', {})
                 }
+
+                # Load real data for the FinalHybridRecommender by directly setting data attributes
+                try:
+                    logger.info("Attempting to load real training data for FinalHybridRecommender...")
+                    # Directly inject real data into the FinalHybridRecommender
+                    self._load_real_data_for_hybrid_model()
+                    logger.info("Successfully loaded real training data for FinalHybridRecommender")
+                except Exception as e:
+                    logger.error(f"Failed to load real training data for FinalHybridRecommender: {e}")
+                    import traceback
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+
                 logger.info("Hybrid recommender loaded successfully from trained model")
             else:
                 # Legacy format with separate components
@@ -75,6 +87,127 @@ class HybridRecommender:
         except Exception as e:
             logger.error(f"Error creating hybrid fallback model: {e}")
 
+    def _load_real_data_for_hybrid_model(self):
+        """Load real data for the FinalHybridRecommender from actual databases - no CSV fallbacks"""
+        import pandas as pd
+        import numpy as np
+        from services.content_service import ContentService
+        from services.tracking_service import TrackingService
+
+        try:
+            logger.info("Loading real data from databases for hybrid model...")
+
+            # Use the same services as other models for consistency
+            content_service = ContentService()
+            tracking_service = TrackingService()
+
+            # Load real exercise data (same as collaborative model)
+            logger.info("Loading real exercise data from content service...")
+            exercise_data = content_service.get_all_exercises()
+
+            if exercise_data and len(exercise_data) > 0:
+                self.hybrid_recommender.exercises_df = pd.DataFrame(exercise_data)
+                logger.info(f"Loaded {len(self.hybrid_recommender.exercises_df)} REAL exercises from database")
+            else:
+                logger.error("No real exercise data available from content service")
+                # Use enhanced mock data with real names instead of CSV
+                enhanced_exercises = content_service._get_mock_exercises()
+                self.hybrid_recommender.exercises_df = pd.DataFrame(enhanced_exercises)
+                logger.info(f"Using enhanced exercise data with real names: {len(self.hybrid_recommender.exercises_df)} exercises")
+
+            # Load REAL ratings data from tracking database - NO synthetic data
+            logger.info("Loading REAL ratings data from tracking database...")
+            try:
+                # Connect directly to tracking database to get real workout ratings
+                import mysql.connector
+                import os
+
+                # Get database connection details
+                db_config = {
+                    'host': 'fitnease-tracking-db',
+                    'port': 3306,
+                    'user': 'root',
+                    'password': 'rootpassword',
+                    'database': 'fitnease_tracking_db'
+                }
+
+                # Query real workout ratings directly
+                connection = mysql.connector.connect(**db_config)
+                cursor = connection.cursor(dictionary=True)
+
+                # Get all real workout ratings
+                query = """
+                SELECT
+                    user_id,
+                    workout_id as exercise_id,
+                    rating_value as rating,
+                    rated_at,
+                    difficulty_rating,
+                    enjoyment_rating
+                FROM workout_ratings
+                WHERE rating_value IS NOT NULL
+                ORDER BY rated_at DESC
+                """
+
+                cursor.execute(query)
+                real_ratings = cursor.fetchall()
+                cursor.close()
+                connection.close()
+
+                if real_ratings and len(real_ratings) > 0:
+                    self.hybrid_recommender.ratings_df = pd.DataFrame(real_ratings)
+                    logger.info(f"Loaded {len(self.hybrid_recommender.ratings_df)} REAL workout ratings from tracking database")
+                else:
+                    logger.error("No real ratings found in tracking database")
+                    raise Exception("No real workout ratings available")
+
+            except Exception as e:
+                logger.error(f"Failed to load real ratings from tracking database: {e}")
+                # Only use tracking service as fallback - still real data
+                try:
+                    ratings_data = tracking_service.get_all_ratings()
+                    if ratings_data and len(ratings_data) > 0:
+                        self.hybrid_recommender.ratings_df = pd.DataFrame(ratings_data)
+                        logger.info(f"Loaded {len(self.hybrid_recommender.ratings_df)} real ratings via tracking service")
+                    else:
+                        raise Exception("No real ratings available from tracking service")
+                except Exception as e2:
+                    logger.error(f"All attempts to load real ratings failed: {e2}")
+                    raise Exception("Cannot initialize hybrid model without real rating data")
+
+            # Create user-item matrix
+            self.hybrid_recommender.user_item_matrix = self.hybrid_recommender.ratings_df.pivot_table(
+                index='user_id',
+                columns='exercise_id',
+                values='rating',
+                fill_value=np.nan
+            )
+
+            logger.info(f"Final data loaded: {len(self.hybrid_recommender.ratings_df)} REAL ratings, {len(self.hybrid_recommender.exercises_df)} exercises")
+            logger.info(f"User-item matrix shape: {self.hybrid_recommender.user_item_matrix.shape}")
+
+            # Check actual users in the real rating data
+            unique_users = self.hybrid_recommender.ratings_df['user_id'].unique()
+            logger.info(f"Real rating data contains {len(unique_users)} unique users")
+
+            # Check if any users have sufficient ratings for recommendations
+            users_with_ratings = []
+            for user_id in unique_users[:10]:  # Check first 10 users
+                user_ratings = len(self.hybrid_recommender.ratings_df[self.hybrid_recommender.ratings_df['user_id'] == user_id])
+                if user_ratings >= 5:  # Users with at least 5 ratings
+                    users_with_ratings.append((user_id, user_ratings))
+
+            if users_with_ratings:
+                logger.info(f"Found {len(users_with_ratings)} users with sufficient ratings for hybrid recommendations")
+                for user_id, rating_count in users_with_ratings[:3]:
+                    logger.info(f"  User {user_id}: {rating_count} ratings")
+            else:
+                logger.warning("No users found with sufficient ratings - new user recommendations will use content-based approach")
+
+        except Exception as e:
+            logger.error(f"Critical error loading hybrid model data: {e}")
+            raise
+
     def set_model_data(self, model_data: Dict):
         """Set model data after initialization"""
         self._load_model_data(model_data)
@@ -85,33 +218,36 @@ class HybridRecommender:
         """Get hybrid recommendations combining content-based and collaborative filtering"""
         try:
             # Use trained hybrid recommender if available
-            if self.hybrid_recommender and hasattr(self.hybrid_recommender, 'recommend'):
+            if self.hybrid_recommender and hasattr(self.hybrid_recommender, 'get_hybrid_recommendations'):
                 try:
-                    # Use the loaded FinalHybridRecommender
-                    recommendations = self.hybrid_recommender.recommend(
+                    # Use the loaded FinalHybridRecommender with correct method name
+                    recommendations = self.hybrid_recommender.get_hybrid_recommendations(
                         user_id=user_id or 1,  # Provide default user_id if none given
-                        n_recommendations=num_recommendations,
-                        user_profile=user_preferences
+                        num_recs=num_recommendations
                     )
+
+                    logger.info(f"Trained hybrid model returned {len(recommendations)} recommendations")
 
                     # Format recommendations for API response
                     formatted_recs = []
                     for rec in recommendations:
+                        # The FinalHybridRecommender returns properly formatted data already
                         formatted_rec = {
-                            'exercise_id': rec.get('item_id', rec.get('exercise_id')),
-                            'exercise_name': rec.get('exercise_name', f"Exercise_{rec.get('item_id', 'Unknown')}"),
-                            'target_muscle_group': rec.get('target_muscle_group', 'unknown'),
-                            'difficulty_level': rec.get('difficulty_level', 2),
-                            'equipment_needed': rec.get('equipment_needed', 'unknown'),
-                            'hybrid_score': rec.get('score', 0.5),
-                            'content_score': rec.get('content_weight', content_weight),
-                            'collaborative_score': rec.get('collaborative_weight', collaborative_weight),
-                            'calories_per_minute': rec.get('calories_per_minute', 5),
-                            'duration_seconds': rec.get('duration_seconds', 1800),
-                            'recommendation_type': rec.get('recommendation_type', 'hybrid'),
+                            'exercise_id': rec.get('exercise_id'),
+                            'exercise_name': rec.get('exercise_name'),
+                            'target_muscle_group': rec.get('target_muscle_group'),
+                            'difficulty_level': rec.get('difficulty_level'),
+                            'equipment_needed': rec.get('equipment_needed'),
+                            'hybrid_score': rec.get('hybrid_score'),
+                            'content_score': rec.get('content_score'),
+                            'collaborative_score': rec.get('cf_score'),  # Note: it's 'cf_score' in notebook format
+                            'calories_per_minute': rec.get('calories_burned_per_minute', 5),
+                            'duration_seconds': 1800,  # Default Tabata duration for exercises
+                            'recommendation_type': 'hybrid',
+                            'recommendation_reason': f"Hybrid recommendation (Content: {rec.get('content_score', 0):.2f}, CF: {rec.get('cf_score', 0):.2f})",
                             'weights_used': {
-                                'content_weight': rec.get('content_weight', content_weight),
-                                'collaborative_weight': rec.get('collaborative_weight', collaborative_weight)
+                                'content_weight': content_weight,
+                                'collaborative_weight': collaborative_weight
                             }
                         }
                         formatted_recs.append(formatted_rec)

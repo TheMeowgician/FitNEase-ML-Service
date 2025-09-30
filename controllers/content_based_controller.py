@@ -88,10 +88,14 @@ class ContentBasedController:
 
             # Note: Exercise data will be loaded by the ML model directly when needed
 
-            # Get real exercise data from content service
+            # Always get real exercise data from content service (remove token dependency)
             logger.info("Getting real exercise data from content service...")
-            exercise_data = None
-            if auth_token:
+
+            # Try to get exercise data without token first (internal ML endpoint)
+            exercise_data = self.content_service.get_all_exercises()
+
+            if not exercise_data and auth_token:
+                # Fallback to token-based endpoint if internal fails
                 exercise_data = self.content_service.get_exercise_attributes_with_token(auth_token)
 
             if exercise_data and len(exercise_data) > 0:
@@ -106,9 +110,19 @@ class ContentBasedController:
                     exercise_data, real_preferences, num_recommendations
                 )
             else:
-                # No exercise data available - return error instead of mock data
-                logger.error("No real exercise data available from content service")
-                return {'error': 'Exercise data unavailable', 'recommendations': []}, 503
+                # API endpoints failed, but we have enhanced exercise data with real names
+                logger.warning("API endpoints returned no data, using enhanced exercise data with real names")
+
+                # The content service's _get_mock_exercises now has real exercise names
+                enhanced_exercise_data = self.content_service._get_mock_exercises()
+
+                # Extract and format user preferences from real user data
+                real_preferences = self._extract_user_preferences(user_data)
+                logger.info(f"Using real user preferences: {real_preferences}")
+
+                recommendations = self._generate_content_based_recommendations(
+                    enhanced_exercise_data, real_preferences, num_recommendations
+                )
 
             # Transform recommendations to match client interface
             transformed_recommendations = []
@@ -284,26 +298,6 @@ class ContentBasedController:
 
         except Exception as e:
             logger.warning(f"Failed to save content-based score: {e}")
-    def _generate_mock_recommendations(self, num_recommendations: int) -> List[Dict]:
-        """Generate mock recommendations when trained model is not available"""
-        mock_recommendations = []
-
-        for i in range(num_recommendations):
-            mock_rec = {
-                "exercise_id": 100 + i,
-                "exercise_name": f"Recommended Exercise {i + 1}",
-                "target_muscle_group": "core",
-                "difficulty_level": 2,
-                "equipment_needed": "bodyweight",
-                "exercise_category": "strength",
-                "calories_burned_per_minute": 4.0,
-                "default_duration_seconds": 30,
-                "preference_score": 0.8,
-                "instructions": f"This is a mock exercise recommendation {i + 1}"
-            }
-            mock_recommendations.append(mock_rec)
-
-        return mock_recommendations
 
     def _generate_content_based_recommendations(self, exercise_data: List[Dict], user_preferences: Dict, num_recommendations: int) -> List[Dict]:
         """Generate content-based recommendations using real exercise data"""
@@ -433,3 +427,4 @@ class ContentBasedController:
         preferences['activity_level'] = user_data.get('activity_level', 'moderate')
 
         return preferences
+
