@@ -68,6 +68,7 @@ class ContentBasedController:
                 return {'error': 'Content-based model not available'}, 503
 
             # Get user preferences from auth service (with token)
+            # Auth service now returns fitness_level from latest assessment via accessor
             user_data = None
             if auth_token:
                 user_data = self.auth_service.get_user_profile_with_token(user_id, auth_token)
@@ -77,7 +78,7 @@ class ContentBasedController:
                 logger.warning(f"Auth service unavailable for user {user_id}, using default preferences")
                 user_data = {
                     'target_muscle_groups': ['core', 'upper_body', 'lower_body'],
-                    'fitness_level': 'intermediate',
+                    'fitness_level': 'beginner',  # Default fallback
                     'available_equipment': ['bodyweight'],
                     'fitness_goals': ['general_fitness'],
                     'age': 25,
@@ -324,8 +325,11 @@ class ContentBasedController:
             # Difficulty preference (30% weight)
             # Convert text difficulty to numeric for comparison
             exercise_difficulty_text = exercise.get('difficulty_level', 'medium')
-            difficulty_map = {'beginner': 1, 'medium': 2, 'advanced': 3, 'expert': 3, 'intermediate': 2}
-            exercise_difficulty = difficulty_map.get(exercise_difficulty_text, 2)
+            if isinstance(exercise_difficulty_text, int):
+                exercise_difficulty = exercise_difficulty_text
+            else:
+                difficulty_map = {'beginner': 1, 'medium': 2, 'intermediate': 2, 'advanced': 3, 'expert': 3}
+                exercise_difficulty = difficulty_map.get(exercise_difficulty_text.lower() if isinstance(exercise_difficulty_text, str) else 'medium', 2)
 
             difficulty_diff = abs(exercise_difficulty - preferred_difficulty)
             if difficulty_diff == 0:
@@ -400,10 +404,11 @@ class ContentBasedController:
         difficulty_map = {
             'beginner': 1,
             'intermediate': 2,
+            'medium': 2,  # Laravel uses 'medium' for intermediate
             'advanced': 3,
             'expert': 3
         }
-        preferences['difficulty'] = difficulty_map.get(fitness_level, 2)
+        preferences['difficulty'] = difficulty_map.get(fitness_level.lower() if isinstance(fitness_level, str) else 'intermediate', 2)
 
         # Extract equipment from available_equipment (array field)
         available_equipment = user_data.get('available_equipment', [])
