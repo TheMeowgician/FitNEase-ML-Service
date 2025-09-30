@@ -30,6 +30,7 @@ class HybridController:
             num_recommendations = data.get('num_recommendations', 10) if data else 10
             content_weight = data.get('content_weight', 0.7) if data else 0.7
             collaborative_weight = data.get('collaborative_weight', 0.3) if data else 0.3
+            auth_token = data.get('auth_token') if data else None
 
             # Validate weights
             if abs(content_weight + collaborative_weight - 1.0) > 0.01:
@@ -57,6 +58,35 @@ class HybridController:
                 content_weight=content_weight,
                 collaborative_weight=collaborative_weight
             )
+
+            # FALLBACK: If hybrid returns no recommendations (insufficient collaborative data),
+            # automatically fallback to pure content-based recommendations
+            if len(recommendations) == 0:
+                logger.warning(f"Hybrid model returned 0 recommendations for user {user_id}, falling back to content-based")
+                from controllers.content_based_controller import ContentBasedController
+                content_controller = ContentBasedController()
+                fallback_data = {
+                    'num_recommendations': num_recommendations,
+                    'auth_token': auth_token
+                }
+                content_result = content_controller.get_user_recommendations(user_id, fallback_data)
+
+                if isinstance(content_result, tuple):
+                    return content_result
+
+                # Return content-based recommendations with hybrid format
+                return {
+                    'status': 'success',
+                    'user_id': user_id,
+                    'recommendations': content_result.get('recommendations', []),
+                    'count': content_result.get('count', 0),
+                    'algorithm': 'hybrid_fallback_to_content',
+                    'weights': {
+                        'content_weight': 1.0,
+                        'collaborative_weight': 0.0
+                    },
+                    'note': 'Insufficient collaborative data, using content-based recommendations'
+                }
 
             # Save recommendations to database
             self._save_recommendations(user_id, recommendations, 'hybrid')

@@ -6,6 +6,7 @@ Controller for content-based recommendation operations
 """
 
 import logging
+import time
 from typing import Dict, List, Optional
 from flask import current_app
 
@@ -21,6 +22,10 @@ class ContentBasedController:
     def __init__(self):
         self.auth_service = AuthService()
         self.content_service = ContentService()
+        # Simple in-memory cache with 5-minute TTL
+        self._exercise_cache = None
+        self._exercise_cache_time = 0
+        self._cache_ttl = 300  # 5 minutes
 
     def calculate_similarity(self, data: Dict) -> Dict:
         """Calculate exercise similarity scores"""
@@ -89,15 +94,27 @@ class ContentBasedController:
 
             # Note: Exercise data will be loaded by the ML model directly when needed
 
-            # Always get real exercise data from content service (remove token dependency)
-            logger.info("Getting real exercise data from content service...")
+            # Use cached exercise data if available and fresh (5-minute TTL)
+            current_time = time.time()
+            if self._exercise_cache and (current_time - self._exercise_cache_time) < self._cache_ttl:
+                logger.info(f"Using cached exercise data ({len(self._exercise_cache)} exercises)")
+                exercise_data = self._exercise_cache
+            else:
+                # Always get real exercise data from content service (remove token dependency)
+                logger.info("Getting real exercise data from content service...")
 
-            # Try to get exercise data without token first (internal ML endpoint)
-            exercise_data = self.content_service.get_all_exercises()
+                # Try to get exercise data without token first (internal ML endpoint)
+                exercise_data = self.content_service.get_all_exercises()
 
-            if not exercise_data and auth_token:
-                # Fallback to token-based endpoint if internal fails
-                exercise_data = self.content_service.get_exercise_attributes_with_token(auth_token)
+                if not exercise_data and auth_token:
+                    # Fallback to token-based endpoint if internal fails
+                    exercise_data = self.content_service.get_exercise_attributes_with_token(auth_token)
+
+                # Cache the exercise data
+                if exercise_data:
+                    self._exercise_cache = exercise_data
+                    self._exercise_cache_time = current_time
+                    logger.info(f"Cached {len(exercise_data)} exercises for future requests")
 
             if exercise_data and len(exercise_data) > 0:
                 # Use REAL exercise data from database for recommendations
