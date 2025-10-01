@@ -78,23 +78,27 @@ class ContentService(BaseService):
         Uses real exercise names from database
         """
         try:
-            # Try internal ML endpoint first
-            logger.info("Attempting to get exercises from ML internal endpoint...")
+            # Try exercise-attributes endpoint (has full exercise data with names)
+            logger.info("Attempting to get exercises from exercise-attributes endpoint...")
+            response = self.get('/api/ml-internal/exercise-attributes')
+
+            if self.validate_response(response):
+                # Check both 'exercises' and 'data' keys for compatibility
+                exercises = response.get('exercises') or response.get('data', [])
+                if exercises and len(exercises) > 0:
+                    logger.info(f"Successfully got {len(exercises)} exercises with full data from exercise-attributes endpoint")
+                    return exercises
+
+            # Fallback to all-exercises endpoint
+            logger.info("Exercise-attributes failed, trying all-exercises endpoint...")
             response = self.get('/api/ml-internal/all-exercises')
 
             if self.validate_response(response):
-                exercises = response.get('exercises', [])
-                logger.info(f"Successfully got {len(exercises)} exercises from ML internal endpoint")
-                return exercises
-
-            # Try regular content endpoint with service auth
-            logger.info("ML internal endpoint failed, trying content endpoint...")
-            response = self.get('/api/content/all-exercises')
-
-            if self.validate_response(response):
-                exercises = response.get('exercises', [])
-                logger.info(f"Successfully got {len(exercises)} exercises from content endpoint")
-                return exercises
+                # Check both 'exercises' and 'data' keys for compatibility
+                exercises = response.get('exercises') or response.get('data', [])
+                if exercises and len(exercises) > 0:
+                    logger.info(f"Successfully got {len(exercises)} exercises from all-exercises endpoint")
+                    return exercises
 
             # Use enhanced exercise data with real names instead of mock data
             logger.info("API endpoints unavailable, using enhanced exercise data with real database names")
@@ -108,15 +112,33 @@ class ContentService(BaseService):
     def get_workout_details(self, workout_id: int) -> Optional[Dict]:
         """
         Get workout details for Random Forest predictions
-        Endpoint: GET /content/workouts/{workout_id}
+        In FitNEase, workouts are exercises, so we fetch exercise data
+        Endpoint: GET /api/ml-internal/exercises/{workout_id}
         """
         try:
-            response = self.get(f'/content/workouts/{workout_id}')
+            # Try ML internal endpoint for exercise data
+            logger.info(f"Getting workout/exercise details for ID {workout_id}...")
+            response = self.get(f'/api/ml-internal/exercises/{workout_id}')
 
-            if self.validate_response(response, ['workout_id']):
-                return response
+            if self.validate_response(response):
+                # Map exercise data to workout format expected by RF model
+                exercise = response
+                workout = {
+                    'workout_id': exercise.get('exercise_id'),
+                    'exercise_id': exercise.get('exercise_id'),
+                    'exercise_name': exercise.get('exercise_name'),
+                    'difficulty_level': int(exercise.get('difficulty_level', 1)),  # Convert to int
+                    'target_muscle_group': exercise.get('target_muscle_group'),
+                    'duration_seconds': int(exercise.get('default_duration_seconds', 60)),  # Convert to int
+                    'calories_burned_per_minute': float(exercise.get('calories_burned_per_minute', 5.0)),  # Convert to float
+                    'equipment_needed': exercise.get('equipment_needed', 'bodyweight'),
+                    'exercise_category': exercise.get('exercise_category', 'strength'),
+                }
+                logger.info(f"Successfully got exercise {workout_id}: difficulty={workout.get('difficulty_level')}")
+                return workout
 
             # Fallback: return mock workout data
+            logger.warning(f"Exercise {workout_id} not found, using mock data")
             return self._get_mock_workout(workout_id)
 
         except Exception as e:

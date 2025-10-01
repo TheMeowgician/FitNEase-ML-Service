@@ -22,12 +22,14 @@ class AuthService(BaseService):
     def get_user_profile(self, user_id: int) -> Optional[Dict]:
         """
         Get user profile including preferences, fitness assessments, demographics
-        Endpoint: GET /auth/user-profile/{user_id}
+        Endpoint: GET /ml-internal/user-profile/{user_id}
         """
         try:
-            response = self.get(f'/auth/user-profile/{user_id}')
+            # Try ML internal endpoint first (no auth required)
+            response = self.get(f'/api/ml-internal/user-profile/{user_id}')
 
             if self.validate_response(response, ['user_id']):
+                logger.info(f"Successfully got user profile for user {user_id} from ML internal endpoint")
                 return response
 
             # Fallback: return mock user data

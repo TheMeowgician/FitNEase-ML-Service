@@ -93,16 +93,35 @@ class RandomForestPredictor:
                     'error': 'Feature preparation failed'
                 }
 
-            # Get prediction probability
-            probabilities = self.model.predict_proba(features)
-            appropriateness = float(probabilities[0][1]) if probabilities.shape[1] > 1 else float(probabilities[0][0])
+            # Get prediction from 4-class suitability model
+            # Classes: 0=Unsuitable, 1=Suitable-Easy, 2=Suitable-Appropriate, 3=Suitable-Hard
+            predicted_class = self.model.predict(features)[0]
+            probabilities = self.model.predict_proba(features)[0]
+
+            # Map suitability class to appropriateness score
+            suitability_to_appropriateness = {
+                0: 0.2,  # Unsuitable (too hard or unsafe)
+                1: 0.75, # Suitable-Easy (exercise below user level - good for recovery)
+                2: 0.95, # Suitable-Appropriate (PERFECT MATCH)
+                3: 0.65  # Suitable-Hard (challenging but doable)
+            }
+
+            # Get base appropriateness from predicted class
+            appropriateness = suitability_to_appropriateness.get(predicted_class, 0.5)
+
+            # Weight by confidence (probability of predicted class)
+            confidence = probabilities[predicted_class]
+
+            # Adjust appropriateness by confidence
+            # If model is very confident, use full score; if unsure, move toward 0.5
+            appropriateness = appropriateness * confidence + 0.5 * (1 - confidence)
 
             # Determine difficulty rating
             if appropriateness >= 0.8:
                 difficulty_rating = 'perfect_match'
-            elif appropriateness >= 0.6:
+            elif appropriateness >= 0.65:
                 difficulty_rating = 'good_match'
-            elif appropriateness >= 0.4:
+            elif appropriateness >= 0.45:
                 difficulty_rating = 'moderate_match'
             else:
                 difficulty_rating = 'poor_match'
@@ -112,10 +131,12 @@ class RandomForestPredictor:
                 'difficulty_rating': difficulty_rating,
                 'recommendation': self._get_difficulty_recommendation(appropriateness, user_profile, workout_features),
                 'user_level': user_profile.get('fitness_level', 'unknown'),
-                'workout_difficulty': workout_features.get('difficulty_level', 'unknown')
+                'workout_difficulty': workout_features.get('difficulty_level', 'unknown'),
+                'suitability_class': int(predicted_class),
+                'suitability_confidence': float(confidence)
             }
 
-            logger.info(f"Difficulty appropriateness: {appropriateness:.3f} ({difficulty_rating})")
+            logger.info(f"Suitability class: {predicted_class}, Appropriateness: {appropriateness:.3f} ({difficulty_rating}), Confidence: {confidence:.3f}")
             return result
 
         except Exception as e:

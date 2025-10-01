@@ -101,13 +101,17 @@ class HybridRecommender:
             content_service = ContentService()
             tracking_service = TrackingService()
 
+            # Store original exercise count from pickled model for comparison
+            original_exercise_count = len(self.hybrid_recommender.exercises_df) if hasattr(self.hybrid_recommender, 'exercises_df') else 0
+            self.hybrid_recommender._original_exercise_count = original_exercise_count
+
             # Load real exercise data (same as collaborative model)
             logger.info("Loading real exercise data from content service...")
             exercise_data = content_service.get_all_exercises()
 
             if exercise_data and len(exercise_data) > 0:
                 self.hybrid_recommender.exercises_df = pd.DataFrame(exercise_data)
-                logger.info(f"Loaded {len(self.hybrid_recommender.exercises_df)} REAL exercises from database")
+                logger.info(f"Loaded {len(self.hybrid_recommender.exercises_df)} REAL exercises from database (previously had {original_exercise_count} from pickled model)")
             else:
                 logger.error("No real exercise data available from content service")
                 # Use enhanced mock data with real names instead of CSV
@@ -183,8 +187,13 @@ class HybridRecommender:
                 fill_value=np.nan
             )
 
-            logger.info(f"Final data loaded: {len(self.hybrid_recommender.ratings_df)} REAL ratings, {len(self.hybrid_recommender.exercises_df)} exercises")
-            logger.info(f"User-item matrix shape: {self.hybrid_recommender.user_item_matrix.shape}")
+            # Log the dynamically loaded data counts
+            num_exercises = len(self.hybrid_recommender.exercises_df)
+            num_ratings = len(self.hybrid_recommender.ratings_df)
+
+            logger.info(f"✓ DYNAMIC DATA LOADED: {num_ratings} REAL ratings, {num_exercises} exercises (loaded from database)")
+            logger.info(f"✓ User-item matrix shape: {self.hybrid_recommender.user_item_matrix.shape}")
+            logger.info(f"✓ Exercise count dynamically updated from {getattr(self.hybrid_recommender, '_original_exercise_count', 'N/A')} to {num_exercises}")
 
             # Check actual users in the real rating data
             unique_users = self.hybrid_recommender.ratings_df['user_id'].unique()
