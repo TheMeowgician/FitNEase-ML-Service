@@ -333,6 +333,34 @@ class ContentBasedController:
         for exercise in exercise_data:
             score = 0.0
 
+            # Convert difficulty to numeric for comparison (handle both int and string)
+            exercise_difficulty_text = exercise.get('difficulty_level', 'medium')
+
+            # Try to convert to int first (database uses '1', '3', '5' as strings)
+            try:
+                numeric_diff = int(exercise_difficulty_text) if isinstance(exercise_difficulty_text, (str, int)) else 2
+                # Database uses 1,3,5 scale - convert to 1,2,3 scale for consistency
+                if numeric_diff == 1:
+                    exercise_difficulty = 1  # Beginner
+                elif numeric_diff == 3:
+                    exercise_difficulty = 2  # Intermediate
+                elif numeric_diff == 5:
+                    exercise_difficulty = 3  # Advanced
+                else:
+                    exercise_difficulty = numeric_diff  # Use as-is if already 1,2,3
+            except (ValueError, TypeError):
+                # Text difficulty level
+                difficulty_map = {'beginner': 1, 'medium': 2, 'intermediate': 2, 'advanced': 3, 'expert': 3}
+                exercise_difficulty = difficulty_map.get(str(exercise_difficulty_text).lower(), 2)
+
+            # STRICT DIFFICULTY FILTERING - only show exercises user can handle
+            # Beginner (1): Show only difficulty 1
+            # Intermediate (2): Show difficulty 1 and 2
+            # Advanced (3): Show all difficulties 1, 2, 3
+            if exercise_difficulty > preferred_difficulty:
+                # Skip exercises above user's level
+                continue
+
             # Muscle group preference (40% weight)
             if exercise.get('target_muscle_group') in preferred_muscle_groups:
                 score += 0.4
@@ -340,14 +368,6 @@ class ContentBasedController:
                 score += 0.1  # Small base score for variety
 
             # Difficulty preference (30% weight)
-            # Convert text difficulty to numeric for comparison
-            exercise_difficulty_text = exercise.get('difficulty_level', 'medium')
-            if isinstance(exercise_difficulty_text, int):
-                exercise_difficulty = exercise_difficulty_text
-            else:
-                difficulty_map = {'beginner': 1, 'medium': 2, 'intermediate': 2, 'advanced': 3, 'expert': 3}
-                exercise_difficulty = difficulty_map.get(exercise_difficulty_text.lower() if isinstance(exercise_difficulty_text, str) else 'medium', 2)
-
             difficulty_diff = abs(exercise_difficulty - preferred_difficulty)
             if difficulty_diff == 0:
                 score += 0.3

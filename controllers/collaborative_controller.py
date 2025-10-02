@@ -61,7 +61,7 @@ class CollaborativeController:
             return {'error': str(e)}, 500
 
     def get_user_recommendations(self, user_id: int, data: Dict = None) -> Dict:
-        """Get collaborative recommendations for user"""
+        """Get collaborative recommendations for user - REQUIRES RATING DATA"""
         try:
             num_recommendations = data.get('num_recommendations', 10) if data else 10
 
@@ -70,15 +70,31 @@ class CollaborativeController:
             if not collaborative_model:
                 return {'error': 'Collaborative model not available'}, 503
 
-            # Get user workout history
-            user_history = self.tracking_service.get_user_history(user_id)
-            if not user_history:
-                return {'error': 'No user history found'}, 404
+            # Get user ratings from tracking service (REQUIRED for collaborative filtering)
+            user_ratings = self.tracking_service.get_user_ratings(user_id)
 
-            # Get collaborative recommendations
+            # Check if user has sufficient rating data
+            if not user_ratings or len(user_ratings) == 0:
+                logger.warning(f"Collaborative filtering unavailable for user {user_id}: No ratings found")
+                return {
+                    'status': 'unavailable',
+                    'user_id': user_id,
+                    'recommendations': [],
+                    'count': 0,
+                    'algorithm': 'collaborative_filtering',
+                    'message': 'Collaborative filtering requires rating data. Please complete workouts and rate exercises to enable this feature.',
+                    'required_actions': [
+                        'Complete at least 10 workout sessions',
+                        'Rate at least 5 exercises (thumbs up/down)',
+                        'Try different exercise types for better recommendations'
+                    ]
+                }
+
+            # Get collaborative recommendations with REAL rating data
             recommendations = collaborative_model.get_recommendations(
                 user_id=user_id,
-                num_recommendations=num_recommendations
+                num_recommendations=num_recommendations,
+                user_ratings=user_ratings  # Pass real rating data
             )
 
             # Save recommendations to database

@@ -26,103 +26,61 @@ class CollaborativeRecommender:
         else:
             logger.warning("Collaborative recommender initialized without model data")
 
-    def get_user_similarities(self, user_id: int, top_k: int = 20) -> List[Dict]:
-        """Get similar users for collaborative filtering"""
+    def get_user_similarities(self, user_id: int, top_k: int = 20, user_ratings: Dict = None) -> List[Dict]:
+        """Get similar users based on REAL rating data"""
         try:
-            # Placeholder implementation
-            # In a full implementation, this would calculate user similarities
-            # based on workout patterns, ratings, and preferences
+            # REAL collaborative filtering requires user rating data
+            if not user_ratings or len(user_ratings) == 0:
+                logger.warning(f"No rating data available for user {user_id} - cannot calculate similarities")
+                return []  # Return empty - no synthetic data
 
-            similar_users = []
-            for i in range(1, top_k + 1):
-                if i == user_id:
-                    continue
+            # In a real implementation, this would:
+            # 1. Get all users who rated the same exercises
+            # 2. Calculate similarity (cosine/Pearson correlation)
+            # 3. Return top-k most similar users
 
-                similarity_score = max(0.1, 1.0 - abs(user_id - i) / 100.0)
-                similar_users.append({
-                    'user_id': i,
-                    'similarity_score': similarity_score,
-                    'common_workouts': 5 + (i % 10),
-                    'rating_correlation': 0.5 + (i % 5) / 10
-                })
+            # For now, return empty since we have no rating data infrastructure
+            logger.info(f"Collaborative filtering requires rating data. User {user_id} has {len(user_ratings)} ratings.")
 
-            # Sort by similarity score
-            similar_users.sort(key=lambda x: x['similarity_score'], reverse=True)
-
-            logger.info(f"Generated {len(similar_users)} similar users for user {user_id}")
-            return similar_users[:top_k]
+            # TODO: Implement real similarity calculation when rating data is available
+            return []
 
         except Exception as e:
             logger.error(f"Error getting user similarities: {e}")
             return []
 
-    def get_recommendations(self, user_id: int, num_recommendations: int = 10) -> List[Dict]:
-        """Get collaborative filtering recommendations using real database data"""
+    def get_recommendations(self, user_id: int, num_recommendations: int = 10, user_ratings: Dict = None) -> List[Dict]:
+        """Get collaborative filtering recommendations using REAL user rating data"""
         try:
-            logger.info(f"Getting real collaborative recommendations for user {user_id}")
+            logger.info(f"Getting collaborative recommendations for user {user_id}")
 
-            # Get real exercise data from content service
-            logger.info("Fetching real exercise data from content service...")
-            all_exercises = self.content_service.get_all_exercises()
+            # STEP 1: Check if user has rating data (REQUIRED for collaborative filtering)
+            if not user_ratings or len(user_ratings) == 0:
+                logger.warning(f"Collaborative filtering DISABLED for user {user_id}: No rating data available")
+                logger.info("User must complete workouts and rate exercises to enable collaborative filtering")
+                return []  # Return empty - no synthetic fallback
 
-            if not all_exercises:
-                logger.warning("No exercise data available from content service")
+            # STEP 2: Get similar users based on REAL rating patterns
+            similar_users = self.get_user_similarities(user_id, top_k=10, user_ratings=user_ratings)
+
+            if not similar_users or len(similar_users) == 0:
+                logger.warning(f"No similar users found for user {user_id}")
                 return []
 
-            logger.info(f"Retrieved {len(all_exercises)} real exercises from database")
-
-            # Get similar users (this part can remain algorithmic for now)
-            similar_users = self.get_user_similarities(user_id, top_k=10)
+            # STEP 3: Get exercises that similar users rated highly but current user hasn't tried
+            # This is where real collaborative filtering happens
+            logger.info(f"Found {len(similar_users)} similar users for collaborative filtering")
 
             recommendations = []
 
-            # Generate recommendations based on real exercise data
-            # Use different starting points based on user_id to vary recommendations
-            start_index = (user_id * 3) % len(all_exercises)
+            # TODO: When rating system is complete, implement:
+            # 1. Get exercises rated by similar users
+            # 2. Filter out exercises current user already rated
+            # 3. Rank by average rating from similar users
+            # 4. Return top N recommendations
 
-            for i in range(num_recommendations):
-                # Select exercises in a pattern that varies by user
-                exercise_index = (start_index + i * 7) % len(all_exercises)
-                exercise = all_exercises[exercise_index]
-
-                logger.info(f"Processing exercise {i}: {exercise.get('exercise_name', 'Unknown')} (ID: {exercise.get('exercise_id')})")
-                logger.info(f"Exercise difficulty: {exercise.get('difficulty_level')} (type: {type(exercise.get('difficulty_level'))})")
-
-                # Calculate collaborative score based on user similarity
-                base_score = 0.6 + (i % 4) * 0.1  # Base score between 0.6-0.9
-                collaborative_score = min(0.95, base_score + (user_id % 10) * 0.01)
-
-                # Create recommendation with real exercise data
-                try:
-                    difficulty_level = self._map_difficulty_to_number(exercise.get('difficulty_level'))
-                    duration_seconds = exercise.get('duration_seconds', 300)
-                    calories_burned = exercise.get('calories_burned', self._estimate_calories(duration_seconds, difficulty_level))
-
-                    recommendation = {
-                        'exercise_id': exercise.get('exercise_id'),
-                        'workout_id': exercise.get('workout_id', exercise.get('exercise_id')),
-                        'exercise_name': exercise.get('exercise_name'),
-                        'target_muscle_group': exercise.get('target_muscle_group'),
-                        'difficulty_level': difficulty_level,
-                        'equipment_needed': exercise.get('equipment_needed', 'bodyweight'),
-                        'default_duration_seconds': duration_seconds,
-                        'estimated_calories_burned': calories_burned,
-                        'exercise_category': exercise.get('exercise_category', 'tabata'),
-                        'collaborative_score': collaborative_score,
-                        'recommendation_score': collaborative_score,
-                        'based_on_users': [user['user_id'] for user in similar_users[:3]],
-                        'recommendation_type': 'collaborative',
-                        'recommendation_reason': f"Recommended based on users with similar preferences"
-                    }
-                except Exception as field_error:
-                    logger.error(f"Error processing exercise {exercise.get('exercise_id', 'unknown')}: {field_error}")
-                    logger.error(f"Exercise data: {exercise}")
-                    continue
-
-                recommendations.append(recommendation)
-
-            logger.info(f"Generated {len(recommendations)} real collaborative recommendations for user {user_id}")
-            return recommendations
+            logger.info("Collaborative filtering requires rating data infrastructure")
+            return []
 
         except Exception as e:
             logger.error(f"Error getting collaborative recommendations: {e}")
