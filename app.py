@@ -12,6 +12,7 @@ Date: 2025-09-22
 """
 
 from flask import Flask
+from flask_cors import CORS
 import os
 import logging
 from datetime import datetime
@@ -53,6 +54,15 @@ def create_app():
 
     # Load configuration
     app.config.from_object(Config)
+
+    # Enable CORS for all routes (allows React Native app to make requests)
+    CORS(app, resources={
+        r"/*": {
+            "origins": "*",  # Allow all origins (for development)
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"]
+        }
+    })
 
     # Configure logging
     logging.basicConfig(
