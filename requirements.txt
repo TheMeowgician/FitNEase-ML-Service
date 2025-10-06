@@ -1,5 +1,6 @@
 Flask==2.3.3
 Flask-RESTful==0.3.10
+Flask-CORS==4.0.0
 scikit-learn==1.7.1
 pandas==2.0.3
 numpy==1.26.4
