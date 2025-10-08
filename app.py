@@ -105,5 +105,7 @@ if __name__ == '__main__':
     logger.info("- POST /api/v1/content-similarity - Content-based similarity")
     logger.info("- POST /api/v1/predict-difficulty - Random Forest predictions")
     logger.info("- POST /api/v1/train-model - Model training")
+    logger.info("- POST /api/v1/group-recommendations - Group workout recommendations (NEW)")
+    logger.info("- GET /api/v1/user-profile/{user_id} - ML-ready user profile (NEW)")
 
     app.run(host='0.0.0.0', port=port, debug=debug)

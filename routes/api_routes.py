@@ -13,6 +13,7 @@ from controllers.collaborative_controller import CollaborativeController
 from controllers.hybrid_controller import HybridController
 from controllers.random_forest_controller import RandomForestController
 from controllers.model_management_controller import ModelManagementController
+from controllers.group_workout_controller import GroupWorkoutController
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ collaborative_controller = CollaborativeController()
 hybrid_controller = HybridController()
 rf_controller = RandomForestController()
 management_controller = ModelManagementController()
+group_workout_controller = GroupWorkoutController()
 
 # ============================================================================
 # CORE ML MODEL ENDPOINTS (4 Models Required)
@@ -467,4 +469,66 @@ def random_forest_health():
 
     except Exception as e:
         logger.error(f"Random Forest health endpoint error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# GROUP WORKOUT ENDPOINTS (NEW)
+# ============================================================================
+
+@api_bp.route('/group-recommendations', methods=['POST'])
+def group_recommendations():
+    """
+    Generate group workout recommendations
+
+    Payload:
+    {
+        "user_ids": [1, 2, 3, 4],
+        "workout_format": "tabata",  // or "generic"
+        "target_exercises": 8
+    }
+    """
+    try:
+        # Extract Bearer token from request
+        auth_token = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            auth_token = auth_header[7:]
+
+        data = request.get_json() or {}
+        data['auth_token'] = auth_token
+
+        result = group_workout_controller.get_group_recommendations(data)
+
+        if isinstance(result, tuple):
+            return jsonify(result[0]), result[1]
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Group recommendations endpoint error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@api_bp.route('/user-profile/<int:user_id>', methods=['GET'])
+def user_profile(user_id):
+    """
+    Get ML-ready user profile
+
+    Returns user profile with all features needed for ML predictions
+    """
+    try:
+        # Extract Bearer token from request
+        auth_token = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            auth_token = auth_header[7:]
+
+        data = {'auth_token': auth_token}
+
+        result = group_workout_controller.get_user_profile(user_id, data)
+
+        if isinstance(result, tuple):
+            return jsonify(result[0]), result[1]
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"User profile endpoint error: {e}")
         return jsonify({'error': str(e)}), 500
