@@ -14,6 +14,7 @@ from controllers.hybrid_controller import HybridController
 from controllers.random_forest_controller import RandomForestController
 from controllers.model_management_controller import ModelManagementController
 from controllers.group_workout_controller import GroupWorkoutController
+from controllers.weekly_plan_controller import WeeklyPlanController
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ hybrid_controller = HybridController()
 rf_controller = RandomForestController()
 management_controller = ModelManagementController()
 group_workout_controller = GroupWorkoutController()
+weekly_plan_controller = WeeklyPlanController()
 
 # ============================================================================
 # CORE ML MODEL ENDPOINTS (4 Models Required)
@@ -531,4 +533,61 @@ def user_profile(user_id):
 
     except Exception as e:
         logger.error(f"User profile endpoint error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# WEEKLY WORKOUT PLAN GENERATION (Feature #4)
+# ============================================================================
+
+@api_bp.route('/generate-weekly-plan', methods=['POST'])
+def generate_weekly_plan():
+    """
+    Generate weekly workout plan based on user preferences
+
+    Feature #4: Weekly Workout Plans with Preferred Days
+    Distributes recommended exercises across user's preferred workout days
+
+    Payload:
+    {
+        "user_id": 1,
+        "workout_days": ["monday", "wednesday", "friday"],
+        "fitness_level": "intermediate",
+        "target_muscle_groups": ["upper_body", "lower_body", "core"],
+        "goals": ["weight_loss", "muscle_gain"],
+        "time_constraints": 30
+    }
+
+    Returns:
+    {
+        "success": true,
+        "message": "Weekly plan generated successfully",
+        "data": {
+            "weekly_plan": {
+                "monday": {
+                    "planned": true,
+                    "exercises": [...],
+                    "estimated_duration": 24,
+                    "estimated_calories": 180,
+                    ...
+                },
+                ...
+            },
+            "metadata": {
+                "total_exercises": 18,
+                "estimated_weekly_duration": 90,
+                ...
+            }
+        }
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        result = weekly_plan_controller.generate_weekly_plan(data)
+
+        if isinstance(result, tuple):
+            return jsonify(result[0]), result[1]
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Weekly plan generation endpoint error: {e}")
         return jsonify({'error': str(e)}), 500
