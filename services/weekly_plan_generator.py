@@ -140,49 +140,86 @@ class WeeklyPlanGenerator:
         total_needed: int
     ) -> List[Dict[str, Any]]:
         """
-        Get exercise recommendations from ML HYBRID MODEL
+        Get exercise recommendations using ML models with intelligent fallback
 
-        Uses the same ML-powered hybrid model as Dashboard and Workouts pages
-        for fast, personalized exercise recommendations.
+        Flow (same as Dashboard/Workouts):
+        1. Try Hybrid ML (60% content + 40% collaborative)
+        2. If fails → Try Content-Based ML (100% content, STILL ML!)
+        3. If both fail → Use hardcoded fallback (last resort)
 
         Returns list of exercises with ML-powered personalization
         """
         try:
-            # ✅ Use the hybrid ML model (same as Dashboard/Workouts!)
+            # ✅ STEP 1: Try Hybrid ML model first (same as Dashboard/Workouts!)
             if not self.model_manager:
-                logger.error("[WEEKLY_PLAN] Model manager not available, using fallback")
+                logger.error("[WEEKLY_PLAN] Model manager not available, skipping ML models")
                 return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
 
             hybrid_model = self.model_manager.get_hybrid_model()
-            if not hybrid_model:
-                logger.error("[WEEKLY_PLAN] Hybrid model not loaded, using fallback")
-                return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
+            if hybrid_model:
+                logger.info(f"[WEEKLY_PLAN] Trying HYBRID ML model for user {user_id}")
 
-            logger.info(f"[WEEKLY_PLAN] Getting {total_needed} ML recommendations for user {user_id}")
+                recommendations = hybrid_model.get_recommendations(
+                    user_id=user_id,
+                    user_preferences={
+                        'fitness_level': fitness_level,
+                        'target_muscle_groups': target_muscle_groups if target_muscle_groups else [],
+                        'goals': goals if goals else []
+                    },
+                    num_recommendations=total_needed,
+                    content_weight=0.6,
+                    collaborative_weight=0.4
+                )
 
-            # ✅ Call the same ML method Dashboard uses for consistency
-            recommendations = hybrid_model.get_recommendations(
-                user_id=user_id,
-                user_preferences={
-                    'fitness_level': fitness_level,
-                    'target_muscle_groups': target_muscle_groups if target_muscle_groups else [],
-                    'goals': goals if goals else []
-                },
-                num_recommendations=total_needed,
-                content_weight=0.6,  # Same as Dashboard
-                collaborative_weight=0.4
-            )
+                if recommendations and len(recommendations) > 0:
+                    logger.info(f"[WEEKLY_PLAN] ✅ HYBRID ML returned {len(recommendations)} exercises")
+                    return recommendations
+                else:
+                    logger.warning(f"[WEEKLY_PLAN] Hybrid ML returned 0 recommendations (new user or insufficient data)")
 
-            if recommendations and len(recommendations) > 0:
-                logger.info(f"[WEEKLY_PLAN] ✅ ML model returned {len(recommendations)} personalized exercises")
-                return recommendations
+            # ✅ STEP 2: Fallback to Content-Based ML (STILL ML-POWERED!)
+            logger.info(f"[WEEKLY_PLAN] Falling back to CONTENT-BASED ML model")
+            content_model = self.model_manager.get_content_based_model()
 
-            logger.warning(f"[WEEKLY_PLAN] ML returned 0 recommendations for user {user_id}, using fallback")
+            if content_model:
+                # Build user preferences dict for content-based model
+                user_preferences = {
+                    'muscle_groups': target_muscle_groups if target_muscle_groups else ['core', 'upper_body', 'lower_body'],
+                    'difficulty': self._map_fitness_level_to_difficulty(fitness_level),
+                    'equipment': ['bodyweight'],
+                    'fitness_goals': goals if goals else ['general_fitness']
+                }
+
+                # Content-based model uses user preferences for personalization
+                recommendations = content_model.get_recommendations_by_preferences(
+                    user_preferences=user_preferences,
+                    num_recommendations=total_needed
+                )
+
+                if recommendations and len(recommendations) > 0:
+                    logger.info(f"[WEEKLY_PLAN] ✅ CONTENT-BASED ML returned {len(recommendations)} exercises")
+                    return recommendations
+                else:
+                    logger.warning(f"[WEEKLY_PLAN] Content-based ML returned 0 recommendations")
+
+            # ❌ STEP 3: Both ML models failed, use hardcoded fallback (last resort)
+            logger.warning(f"[WEEKLY_PLAN] Both ML models failed, using hardcoded fallback")
             return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
 
         except Exception as e:
             logger.error(f"[WEEKLY_PLAN] ML recommendation failed: {e}")
             return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
+
+    def _map_fitness_level_to_difficulty(self, fitness_level: str) -> int:
+        """Map fitness level string to numeric difficulty (1-3)"""
+        difficulty_map = {
+            'beginner': 1,
+            'intermediate': 2,
+            'medium': 2,
+            'advanced': 3,
+            'expert': 3
+        }
+        return difficulty_map.get(fitness_level.lower() if fitness_level else 'beginner', 1)
 
     def _get_fallback_exercises(
         self,
