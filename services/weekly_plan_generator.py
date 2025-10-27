@@ -7,7 +7,6 @@ Generates weekly workout plans by distributing recommended exercises across user
 """
 
 import logging
-import requests
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
@@ -141,42 +140,49 @@ class WeeklyPlanGenerator:
         total_needed: int
     ) -> List[Dict[str, Any]]:
         """
-        Get exercise recommendations from content service or fallback
+        Get exercise recommendations from ML HYBRID MODEL
 
-        Returns list of exercises with details
+        Uses the same ML-powered hybrid model as Dashboard and Workouts pages
+        for fast, personalized exercise recommendations.
+
+        Returns list of exercises with ML-powered personalization
         """
         try:
-            # Try to get from content service via HTTP
-            content_service_url = 'http://fitnease-content/api/exercises'
+            # ✅ Use the hybrid ML model (same as Dashboard/Workouts!)
+            if not self.model_manager:
+                logger.error("[WEEKLY_PLAN] Model manager not available, using fallback")
+                return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
 
-            response = requests.get(
-                content_service_url,
-                params={
-                    'muscle_groups': ','.join(target_muscle_groups) if target_muscle_groups else 'full_body',
-                    'difficulty': fitness_level,
-                    'limit': total_needed * 2  # Get extra for variety
+            hybrid_model = self.model_manager.get_hybrid_model()
+            if not hybrid_model:
+                logger.error("[WEEKLY_PLAN] Hybrid model not loaded, using fallback")
+                return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
+
+            logger.info(f"[WEEKLY_PLAN] Getting {total_needed} ML recommendations for user {user_id}")
+
+            # ✅ Call the same ML method Dashboard uses for consistency
+            recommendations = hybrid_model.get_recommendations(
+                user_id=user_id,
+                user_preferences={
+                    'fitness_level': fitness_level,
+                    'target_muscle_groups': target_muscle_groups if target_muscle_groups else [],
+                    'goals': goals if goals else []
                 },
-                timeout=10
+                num_recommendations=total_needed,
+                content_weight=0.6,  # Same as Dashboard
+                collaborative_weight=0.4
             )
 
-            if response.status_code == 200:
-                exercises_data = response.json()
-                exercises = exercises_data.get('data', [])
+            if recommendations and len(recommendations) > 0:
+                logger.info(f"[WEEKLY_PLAN] ✅ ML model returned {len(recommendations)} personalized exercises")
+                return recommendations
 
-                # Ensure we have enough exercises
-                if len(exercises) >= total_needed:
-                    return exercises[:total_needed]
-
-                logger.warning(f"[WEEKLY_PLAN] Only {len(exercises)} exercises available, need {total_needed}")
-                return exercises
-
-            logger.warning(f"[WEEKLY_PLAN] Content service returned {response.status_code}")
+            logger.warning(f"[WEEKLY_PLAN] ML returned 0 recommendations for user {user_id}, using fallback")
+            return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
 
         except Exception as e:
-            logger.error(f"[WEEKLY_PLAN] Failed to fetch from content service: {e}")
-
-        # Fallback: Return sample exercises
-        return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
+            logger.error(f"[WEEKLY_PLAN] ML recommendation failed: {e}")
+            return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
 
     def _get_fallback_exercises(
         self,
