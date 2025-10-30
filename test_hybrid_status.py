@@ -13,7 +13,7 @@ import requests
 import json
 
 # Configuration
-ML_SERVICE_URL = "http://localhost:5000"  # Change if different
+ML_SERVICE_URL = "http://localhost:8009"  # ML service port (or use 8090 for nginx gateway)
 USER_ID = 2047  # Test user
 
 def print_section(title):
