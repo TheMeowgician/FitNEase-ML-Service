@@ -25,7 +25,7 @@ def check_recommendations():
     """Check hybrid recommendations endpoint"""
     print_section("TEST 1: Hybrid Recommendations Endpoint")
 
-    url = f"{ML_SERVICE_URL}/recommendations/{USER_ID}"
+    url = f"{ML_SERVICE_URL}/api/v1/recommendations/{USER_ID}"
 
     try:
         response = requests.get(url, timeout=10)
@@ -86,7 +86,7 @@ def check_model_health():
     """Check hybrid model health"""
     print_section("TEST 2: Hybrid Model Health Check")
 
-    url = f"{ML_SERVICE_URL}/hybrid/health"
+    url = f"{ML_SERVICE_URL}/api/v1/hybrid/health"
 
     try:
         response = requests.get(url, timeout=10)
@@ -119,7 +119,7 @@ def check_collaborative_endpoint():
     """Test pure collaborative endpoint"""
     print_section("TEST 3: Pure Collaborative Filtering")
 
-    url = f"{ML_SERVICE_URL}/collaborative-recommendations/{USER_ID}"
+    url = f"{ML_SERVICE_URL}/api/v1/collaborative-recommendations/{USER_ID}"
 
     try:
         response = requests.get(url, timeout=10)
