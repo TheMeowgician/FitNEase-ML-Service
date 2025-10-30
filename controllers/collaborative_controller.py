@@ -70,12 +70,13 @@ class CollaborativeController:
             if not collaborative_model:
                 return {'error': 'Collaborative model not available'}, 503
 
-            # Get user ratings from tracking service (REQUIRED for collaborative filtering)
-            user_ratings = self.tracking_service.get_user_ratings(user_id)
+            # Get user exercise ratings from tracking service (REQUIRED for collaborative filtering)
+            # This uses the NEW workout_exercise_ratings table with individual exercise ratings
+            user_ratings = self.tracking_service.get_user_exercise_ratings(user_id)
 
             # Check if user has sufficient rating data
             if not user_ratings or len(user_ratings) == 0:
-                logger.warning(f"Collaborative filtering unavailable for user {user_id}: No ratings found")
+                logger.warning(f"Collaborative filtering unavailable for user {user_id}: No exercise ratings found")
                 return {
                     'status': 'unavailable',
                     'user_id': user_id,
@@ -84,9 +85,10 @@ class CollaborativeController:
                     'algorithm': 'collaborative_filtering',
                     'message': 'Collaborative filtering requires rating data. Please complete workouts and rate exercises to enable this feature.',
                     'required_actions': [
-                        'Complete at least 10 workout sessions',
-                        'Rate at least 5 exercises (thumbs up/down)',
-                        'Try different exercise types for better recommendations'
+                        'Complete workout sessions',
+                        'Rate exercises after completing workouts',
+                        'Rate at least 5 exercises for better recommendations',
+                        'Try different exercise types for improved accuracy'
                     ]
                 }
 

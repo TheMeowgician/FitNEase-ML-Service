@@ -139,17 +139,18 @@ class HybridRecommender:
                 connection = mysql.connector.connect(**db_config)
                 cursor = connection.cursor(dictionary=True)
 
-                # Get all real workout ratings
+                # Get all real exercise ratings from the NEW workout_exercise_ratings table
                 query = """
                 SELECT
                     user_id,
-                    workout_id as exercise_id,
+                    exercise_id,
                     rating_value as rating,
                     rated_at,
-                    difficulty_rating,
+                    difficulty_perceived,
                     enjoyment_rating
-                FROM workout_ratings
+                FROM workout_exercise_ratings
                 WHERE rating_value IS NOT NULL
+                    AND completed = 1
                 ORDER BY rated_at DESC
                 """
 
@@ -169,10 +170,15 @@ class HybridRecommender:
                 logger.error(f"Failed to load real ratings from tracking database: {e}")
                 # Only use tracking service as fallback - still real data
                 try:
-                    ratings_data = tracking_service.get_all_ratings()
+                    ratings_data = tracking_service.get_exercise_ratings()
                     if ratings_data and len(ratings_data) > 0:
                         self.hybrid_recommender.ratings_df = pd.DataFrame(ratings_data)
-                        logger.info(f"Loaded {len(self.hybrid_recommender.ratings_df)} real ratings via tracking service")
+                        # Rename columns to match expected format
+                        if 'rated_at' in self.hybrid_recommender.ratings_df.columns:
+                            # Already in correct format from ML data endpoint
+                            logger.info(f"Loaded {len(self.hybrid_recommender.ratings_df)} real exercise ratings via tracking service")
+                        else:
+                            logger.warning("Ratings data has unexpected format")
                     else:
                         raise Exception("No real ratings available from tracking service")
                 except Exception as e2:

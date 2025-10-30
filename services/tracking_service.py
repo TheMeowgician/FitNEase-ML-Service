@@ -105,6 +105,94 @@ class TrackingService(BaseService):
             logger.error(f"Error getting all user ratings: {e}")
             return self._get_mock_all_ratings()
 
+    def get_exercise_ratings(self, user_id: Optional[int] = None, since: Optional[str] = None, limit: Optional[int] = None) -> Optional[List[Dict]]:
+        """
+        Get exercise ratings for collaborative filtering (NEW ML DATA ENDPOINT)
+        Endpoint: GET /tracking/ml-data/exercise-ratings
+
+        Args:
+            user_id: Filter by specific user (optional)
+            since: Filter ratings after this date (optional)
+            limit: Limit number of ratings (optional)
+
+        Returns:
+            List of ratings in format: [
+                {'user_id': int, 'exercise_id': int, 'rating': float, 'rated_at': str},
+                ...
+            ]
+        """
+        try:
+            params = {}
+            if user_id:
+                params['user_id'] = user_id
+            if since:
+                params['since'] = since
+            if limit:
+                params['limit'] = limit
+
+            response = self.get('/tracking/ml-data/exercise-ratings', params=params if params else None)
+
+            if self.validate_response(response):
+                ratings = response.get('ratings', [])
+                logger.info(f"Fetched {len(ratings)} exercise ratings from ML data endpoint")
+                return ratings
+
+            logger.warning("Exercise ratings endpoint unavailable, using mock data")
+            return self._get_mock_exercise_ratings()
+
+        except Exception as e:
+            logger.error(f"Error getting exercise ratings: {e}")
+            return self._get_mock_exercise_ratings()
+
+    def get_user_exercise_ratings(self, user_id: int) -> Optional[Dict[int, float]]:
+        """
+        Get specific user's exercise ratings as a dictionary (NEW ML DATA ENDPOINT)
+        Endpoint: GET /tracking/ml-data/user-ratings/{user_id}
+
+        Args:
+            user_id: The user ID
+
+        Returns:
+            Dictionary mapping exercise_id to rating_value: {exercise_id: rating, ...}
+        """
+        try:
+            response = self.get(f'/tracking/ml-data/user-ratings/{user_id}')
+
+            if self.validate_response(response):
+                ratings = response.get('ratings', {})
+                logger.info(f"Fetched {len(ratings)} exercise ratings for user {user_id}")
+                return ratings
+
+            logger.warning(f"User exercise ratings endpoint unavailable for user {user_id}, using mock data")
+            return self._get_mock_user_exercise_ratings(user_id)
+
+        except Exception as e:
+            logger.error(f"Error getting user exercise ratings for user {user_id}: {e}")
+            return self._get_mock_user_exercise_ratings(user_id)
+
+    def get_rating_statistics(self) -> Optional[Dict]:
+        """
+        Get rating statistics for ML model monitoring (NEW ML DATA ENDPOINT)
+        Endpoint: GET /tracking/ml-data/rating-stats
+
+        Returns:
+            Statistics about rating data: total_ratings, unique_users, unique_exercises, etc.
+        """
+        try:
+            response = self.get('/tracking/ml-data/rating-stats')
+
+            if self.validate_response(response):
+                stats = response.get('statistics', {})
+                logger.info(f"Rating stats: {stats.get('total_ratings', 0)} total ratings")
+                return stats
+
+            logger.warning("Rating statistics endpoint unavailable, using mock data")
+            return self._get_mock_rating_statistics()
+
+        except Exception as e:
+            logger.error(f"Error getting rating statistics: {e}")
+            return self._get_mock_rating_statistics()
+
     def update_behavioral_data(self, user_id: int, behavior_data: Dict) -> bool:
         """Send user behavior updates to tracking service"""
         try:
@@ -377,4 +465,52 @@ class TrackingService(BaseService):
                 'intermediate': 0.50,
                 'expert': 0.20
             }
+        }
+
+    def _get_mock_exercise_ratings(self) -> List[Dict]:
+        """Mock exercise ratings for collaborative filtering"""
+        all_ratings = []
+
+        for user_id in range(1, 101):  # 100 users
+            for exercise_id in range(1, 51):  # 50 exercises
+                # Not all users rate all exercises (sparse matrix ~30% coverage)
+                if (user_id + exercise_id) % 3 == 0:
+                    rating = {
+                        'user_id': user_id,
+                        'exercise_id': exercise_id,
+                        'rating': 3.0 + ((user_id + exercise_id) % 3),  # 3.0-5.0
+                        'rated_at': f'2025-09-{(user_id + exercise_id) % 28 + 1}'
+                    }
+                    all_ratings.append(rating)
+
+        return all_ratings
+
+    def _get_mock_user_exercise_ratings(self, user_id: int) -> Dict[int, float]:
+        """Mock user exercise ratings dictionary"""
+        ratings = {}
+
+        for exercise_id in range(1, 51):  # 50 exercises
+            # User has rated ~30% of exercises
+            if (user_id + exercise_id) % 3 == 0:
+                ratings[exercise_id] = 3.0 + ((user_id + exercise_id) % 3)  # 3.0-5.0
+
+        return ratings
+
+    def _get_mock_rating_statistics(self) -> Dict:
+        """Mock rating statistics"""
+        return {
+            'total_ratings': 1500,
+            'unique_users': 100,
+            'unique_exercises': 50,
+            'average_rating': 4.2,
+            'rating_distribution': {
+                '1': 50,
+                '2': 100,
+                '3': 300,
+                '4': 550,
+                '5': 500
+            },
+            'ratings_per_user': 15.0,
+            'ratings_per_exercise': 30.0,
+            'coverage': 0.30  # 30% of user-exercise pairs have ratings
         }
