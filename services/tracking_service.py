@@ -130,7 +130,7 @@ class TrackingService(BaseService):
             if limit:
                 params['limit'] = limit
 
-            response = self.get('/tracking/ml-data/exercise-ratings', params=params if params else None)
+            response = self.get('/tracking/api/ml-data/exercise-ratings', params=params if params else None)
 
             if self.validate_response(response):
                 ratings = response.get('ratings', [])
@@ -156,7 +156,7 @@ class TrackingService(BaseService):
             Dictionary mapping exercise_id to rating_value: {exercise_id: rating, ...}
         """
         try:
-            response = self.get(f'/tracking/ml-data/user-ratings/{user_id}')
+            response = self.get(f'/tracking/api/ml-data/user-ratings/{user_id}')
 
             if self.validate_response(response):
                 ratings = response.get('ratings', {})
@@ -179,7 +179,7 @@ class TrackingService(BaseService):
             Statistics about rating data: total_ratings, unique_users, unique_exercises, etc.
         """
         try:
-            response = self.get('/tracking/ml-data/rating-stats')
+            response = self.get('/tracking/api/ml-data/rating-stats')
 
             if self.validate_response(response):
                 stats = response.get('statistics', {})
