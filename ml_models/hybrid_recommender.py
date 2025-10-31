@@ -111,12 +111,26 @@ class HybridRecommender:
 
             if exercise_data and len(exercise_data) > 0:
                 self.hybrid_recommender.exercises_df = pd.DataFrame(exercise_data)
+
+                # Ensure correct data types for numeric operations
+                self.hybrid_recommender.exercises_df['exercise_id'] = pd.to_numeric(self.hybrid_recommender.exercises_df['exercise_id'], errors='coerce')
+                self.hybrid_recommender.exercises_df['difficulty_level'] = pd.to_numeric(self.hybrid_recommender.exercises_df['difficulty_level'], errors='coerce').fillna(2).astype(int)
+                self.hybrid_recommender.exercises_df['calories_burned_per_minute'] = pd.to_numeric(self.hybrid_recommender.exercises_df['calories_burned_per_minute'], errors='coerce').fillna(5.0)
+                self.hybrid_recommender.exercises_df['default_duration_seconds'] = pd.to_numeric(self.hybrid_recommender.exercises_df['default_duration_seconds'], errors='coerce').fillna(60).astype(int)
+
                 logger.info(f"Loaded {len(self.hybrid_recommender.exercises_df)} REAL exercises from database (previously had {original_exercise_count} from pickled model)")
             else:
                 logger.error("No real exercise data available from content service")
                 # Use enhanced mock data with real names instead of CSV
                 enhanced_exercises = content_service._get_mock_exercises()
                 self.hybrid_recommender.exercises_df = pd.DataFrame(enhanced_exercises)
+
+                # Ensure correct data types
+                self.hybrid_recommender.exercises_df['exercise_id'] = pd.to_numeric(self.hybrid_recommender.exercises_df['exercise_id'], errors='coerce')
+                self.hybrid_recommender.exercises_df['difficulty_level'] = pd.to_numeric(self.hybrid_recommender.exercises_df['difficulty_level'], errors='coerce').fillna(2).astype(int)
+                self.hybrid_recommender.exercises_df['calories_burned_per_minute'] = pd.to_numeric(self.hybrid_recommender.exercises_df['calories_burned_per_minute'], errors='coerce').fillna(5.0)
+                self.hybrid_recommender.exercises_df['default_duration_seconds'] = pd.to_numeric(self.hybrid_recommender.exercises_df['default_duration_seconds'], errors='coerce').fillna(60).astype(int)
+
                 logger.info(f"Using enhanced exercise data with real names: {len(self.hybrid_recommender.exercises_df)} exercises")
 
             # Load REAL ratings data from tracking database - NO synthetic data
@@ -162,6 +176,14 @@ class HybridRecommender:
 
                 if real_ratings and len(real_ratings) > 0:
                     self.hybrid_recommender.ratings_df = pd.DataFrame(real_ratings)
+
+                    # Ensure correct data types for numeric operations
+                    self.hybrid_recommender.ratings_df['user_id'] = pd.to_numeric(self.hybrid_recommender.ratings_df['user_id'], errors='coerce').astype(int)
+                    self.hybrid_recommender.ratings_df['exercise_id'] = pd.to_numeric(self.hybrid_recommender.ratings_df['exercise_id'], errors='coerce').astype(int)
+                    self.hybrid_recommender.ratings_df['rating'] = pd.to_numeric(self.hybrid_recommender.ratings_df['rating'], errors='coerce')
+                    if 'enjoyment_rating' in self.hybrid_recommender.ratings_df.columns:
+                        self.hybrid_recommender.ratings_df['enjoyment_rating'] = pd.to_numeric(self.hybrid_recommender.ratings_df['enjoyment_rating'], errors='coerce')
+
                     logger.info(f"Loaded {len(self.hybrid_recommender.ratings_df)} REAL workout ratings from tracking database")
                 else:
                     logger.error("No real ratings found in tracking database")
@@ -174,6 +196,14 @@ class HybridRecommender:
                     ratings_data = tracking_service.get_exercise_ratings()
                     if ratings_data and len(ratings_data) > 0:
                         self.hybrid_recommender.ratings_df = pd.DataFrame(ratings_data)
+
+                        # Ensure correct data types for numeric operations
+                        self.hybrid_recommender.ratings_df['user_id'] = pd.to_numeric(self.hybrid_recommender.ratings_df['user_id'], errors='coerce').astype(int)
+                        self.hybrid_recommender.ratings_df['exercise_id'] = pd.to_numeric(self.hybrid_recommender.ratings_df['exercise_id'], errors='coerce').astype(int)
+                        self.hybrid_recommender.ratings_df['rating'] = pd.to_numeric(self.hybrid_recommender.ratings_df['rating'], errors='coerce')
+                        if 'enjoyment_rating' in self.hybrid_recommender.ratings_df.columns:
+                            self.hybrid_recommender.ratings_df['enjoyment_rating'] = pd.to_numeric(self.hybrid_recommender.ratings_df['enjoyment_rating'], errors='coerce')
+
                         # Rename columns to match expected format
                         if 'rated_at' in self.hybrid_recommender.ratings_df.columns:
                             # Already in correct format from ML data endpoint
