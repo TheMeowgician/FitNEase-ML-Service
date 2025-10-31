@@ -245,7 +245,7 @@ class HybridRecommender:
                     elif hasattr(self.hybrid_recommender, 'recommend'):
                         recommendations = self.hybrid_recommender.recommend(
                             user_id=user_id or 1,
-                            num_recommendations=num_recommendations
+                            n_recommendations=num_recommendations
                         )
                     else:
                         raise Exception("No recommendation method found on hybrid model")
