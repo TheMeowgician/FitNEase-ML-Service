@@ -7,6 +7,14 @@ Test the trained model directly to debug why it returns 0 recommendations.
 
 import pickle
 import logging
+import sys
+import os
+
+# Add path for imports
+sys.path.insert(0, '/app')
+
+# Import custom classes needed for unpickling
+from ml_models.custom_classes import FinalHybridRecommender
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
