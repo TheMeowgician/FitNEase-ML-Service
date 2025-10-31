@@ -39,8 +39,11 @@ logger.info(f"Available methods: {[m for m in dir(recommender) if not m.startswi
 
 # Try to get recommendations
 try:
-    # Try different method names
-    if hasattr(recommender, 'get_hybrid_recommendations'):
+    # Try the recommend method
+    if hasattr(recommender, 'recommend'):
+        logger.info(f"Calling recommend method...")
+        recommendations = recommender.recommend(test_user, 10)
+    elif hasattr(recommender, 'get_hybrid_recommendations'):
         recommendations = recommender.get_hybrid_recommendations(test_user, 10)
     elif hasattr(recommender, 'get_recommendations'):
         recommendations = recommender.get_recommendations(test_user, 10)
