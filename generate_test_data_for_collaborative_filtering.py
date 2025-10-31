@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 def get_auth_db_connection():
     """Get auth database connection"""
     return mysql.connector.connect(
-        host=os.getenv('AUTH_DB_HOST', 'localhost'),
-        port=int(os.getenv('AUTH_DB_PORT', 3307)),
+        host=os.getenv('AUTH_DB_HOST', 'fitnease-auth-db'),
+        port=int(os.getenv('AUTH_DB_PORT', 3306)),
         database='fitnease_auth_db',
         user='root',
         password=os.getenv('MYSQL_ROOT_PASSWORD', '5mMFUgBvx7xu7rvAI7p0T7rc9ZoHc6yl3zbpIWKV6jU='),
@@ -31,8 +31,8 @@ def get_auth_db_connection():
 def get_tracking_db_connection():
     """Get tracking database connection"""
     return mysql.connector.connect(
-        host=os.getenv('TRACKING_DB_HOST', 'localhost'),
-        port=int(os.getenv('TRACKING_DB_PORT', 3315)),
+        host=os.getenv('TRACKING_DB_HOST', 'fitnease-tracking-db'),
+        port=int(os.getenv('TRACKING_DB_PORT', 3306)),
         database='fitnease_tracking_db',
         user='root',
         password=os.getenv('MYSQL_ROOT_PASSWORD', '5mMFUgBvx7xu7rvAI7p0T7rc9ZoHc6yl3zbpIWKV6jU='),
