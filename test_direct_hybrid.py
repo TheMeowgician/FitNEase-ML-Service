@@ -34,13 +34,18 @@ logger.info(f"Matrix shape: {recommender.user_item_matrix.shape if recommender.u
 test_user = 2050
 logger.info(f"\nTesting with user {test_user}...")
 
-# Check user context
-user_context = recommender.get_user_context(test_user)
-logger.info(f"User context: {user_context}")
+# Check available methods
+logger.info(f"Available methods: {[m for m in dir(recommender) if not m.startswith('_')]}")
 
 # Try to get recommendations
 try:
-    recommendations = recommender.get_hybrid_recommendations(test_user, 10)
+    # Try different method names
+    if hasattr(recommender, 'get_hybrid_recommendations'):
+        recommendations = recommender.get_hybrid_recommendations(test_user, 10)
+    elif hasattr(recommender, 'get_recommendations'):
+        recommendations = recommender.get_recommendations(test_user, 10)
+    else:
+        raise Exception("No recommendation method found")
     logger.info(f"\n✅ Generated {len(recommendations)} recommendations")
 
     for i, rec in enumerate(recommendations[:5], 1):
