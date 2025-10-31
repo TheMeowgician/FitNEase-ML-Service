@@ -487,6 +487,12 @@ class TrackingService(BaseService):
 
     def _get_mock_user_exercise_ratings(self, user_id: int) -> Dict[int, float]:
         """Mock user exercise ratings dictionary"""
+        # For truly new/non-existent users (high user IDs), return empty ratings
+        # This allows testing of content-only fallback behavior
+        if user_id > 10000:
+            logger.info(f"User {user_id} appears to be new/non-existent, returning empty ratings")
+            return {}
+
         ratings = {}
 
         for exercise_id in range(1, 51):  # 50 exercises
