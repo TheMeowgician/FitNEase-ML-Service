@@ -126,12 +126,13 @@ class HybridRecommender:
                 import mysql.connector
                 import os
 
-                # Get database connection details
+                # Get database connection details (use environment variable)
+                db_password = os.getenv('MYSQL_ROOT_PASSWORD', '5mMFUgBvx7xu7rvAI7p0T7rc9ZoHc6yl3zbpIWKV6jU=')
                 db_config = {
                     'host': 'fitnease-tracking-db',
                     'port': 3306,
                     'user': 'root',
-                    'password': 'rootpassword',
+                    'password': db_password,
                     'database': 'fitnease_tracking_db'
                 }
 
