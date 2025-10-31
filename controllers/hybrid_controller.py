@@ -47,10 +47,44 @@ class HybridController:
             # Get user history from tracking service
             user_history = self.tracking_service.get_user_history(user_id)
 
+            # Check if user has sufficient ratings for collaborative filtering
+            user_ratings = self.tracking_service.get_user_exercise_ratings(user_id)
+            user_rating_count = len(user_ratings) if user_ratings else 0
+
+            # If user has fewer than 5 ratings, use content-only (collaborative filtering not meaningful)
+            if user_rating_count < 5:
+                logger.info(f"User {user_id} has only {user_rating_count} ratings - using content-based recommendations")
+                from controllers.content_based_controller import ContentBasedController
+                content_controller = ContentBasedController()
+                fallback_data = {
+                    'num_recommendations': num_recommendations,
+                    'auth_token': auth_token
+                }
+                content_result = content_controller.get_user_recommendations(user_id, fallback_data)
+
+                if isinstance(content_result, tuple):
+                    return content_result
+
+                # Return content-based recommendations with clear labeling
+                return {
+                    'status': 'success',
+                    'user_id': user_id,
+                    'recommendations': content_result.get('recommendations', []),
+                    'count': content_result.get('count', 0),
+                    'algorithm': 'hybrid_fallback_to_content',
+                    'algorithmDisplay': 'Content',
+                    'weights': {
+                        'content_weight': 1.0,
+                        'collaborative_weight': 0.0
+                    },
+                    'note': f'User has {user_rating_count} ratings. Complete 5+ workouts and rate exercises to enable hybrid recommendations.'
+                }
+
             # Get exercise data from content service
             exercises = self.content_service.get_exercise_attributes()
 
-            # Generate hybrid recommendations
+            # Generate hybrid recommendations (user has sufficient ratings)
+            logger.info(f"User {user_id} has {user_rating_count} ratings - using hybrid recommendations")
             recommendations = hybrid_model.get_recommendations(
                 user_id=user_id,
                 user_preferences=user_data.get('preferences') if user_data else None,
@@ -102,7 +136,8 @@ class HybridController:
                 'weights': {
                     'content_weight': content_weight,
                     'collaborative_weight': collaborative_weight
-                }
+                },
+                'note': f'Using hybrid recommendations with {user_rating_count} user ratings for collaborative filtering'
             }
 
         except Exception as e:
