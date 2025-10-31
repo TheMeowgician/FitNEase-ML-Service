@@ -233,14 +233,22 @@ class HybridRecommender:
                           content_weight: float = 0.7, collaborative_weight: float = 0.3) -> List[Dict]:
         """Get hybrid recommendations combining content-based and collaborative filtering"""
         try:
-            # Use trained hybrid recommender if available
-            if self.hybrid_recommender and hasattr(self.hybrid_recommender, 'get_hybrid_recommendations'):
+            # Use trained hybrid recommender if available (check for both method names)
+            if self.hybrid_recommender and (hasattr(self.hybrid_recommender, 'get_hybrid_recommendations') or hasattr(self.hybrid_recommender, 'recommend')):
                 try:
                     # Use the loaded FinalHybridRecommender with correct method name
-                    recommendations = self.hybrid_recommender.get_hybrid_recommendations(
-                        user_id=user_id or 1,  # Provide default user_id if none given
-                        num_recs=num_recommendations
-                    )
+                    if hasattr(self.hybrid_recommender, 'get_hybrid_recommendations'):
+                        recommendations = self.hybrid_recommender.get_hybrid_recommendations(
+                            user_id=user_id or 1,  # Provide default user_id if none given
+                            num_recs=num_recommendations
+                        )
+                    elif hasattr(self.hybrid_recommender, 'recommend'):
+                        recommendations = self.hybrid_recommender.recommend(
+                            user_id=user_id or 1,
+                            num_recommendations=num_recommendations
+                        )
+                    else:
+                        raise Exception("No recommendation method found on hybrid model")
 
                     logger.info(f"Trained hybrid model returned {len(recommendations)} recommendations")
 
