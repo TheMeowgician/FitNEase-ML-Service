@@ -53,7 +53,8 @@ class CollaborativeController:
                 'user_id': user_id,
                 'similar_users': similar_users,
                 'count': len(similar_users),
-                'algorithm': 'collaborative_filtering'
+                'algorithm': 'collaborative_filtering',
+                'algorithmDisplay': 'Collaborative'
             }
 
         except Exception as e:
@@ -83,6 +84,7 @@ class CollaborativeController:
                     'recommendations': [],
                     'count': 0,
                     'algorithm': 'collaborative_filtering',
+                    'algorithmDisplay': 'Collaborative',
                     'message': 'Collaborative filtering requires rating data. Please complete workouts and rate exercises to enable this feature.',
                     'required_actions': [
                         'Complete workout sessions',
@@ -107,7 +109,8 @@ class CollaborativeController:
                 'user_id': user_id,
                 'recommendations': recommendations,
                 'count': len(recommendations),
-                'algorithm': 'collaborative_filtering'
+                'algorithm': 'collaborative_filtering',
+                'algorithmDisplay': 'Collaborative'
             }
 
         except Exception as e:

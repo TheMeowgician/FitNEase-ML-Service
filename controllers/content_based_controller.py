@@ -182,7 +182,8 @@ class ContentBasedController:
                 'user_id': user_id,
                 'recommendations': transformed_recommendations,
                 'count': len(transformed_recommendations),
-                'algorithm': 'content_based'
+                'algorithm': 'content_based',
+                'algorithmDisplay': 'Content'
             }
 
         except Exception as e:

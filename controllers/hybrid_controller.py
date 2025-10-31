@@ -81,6 +81,7 @@ class HybridController:
                     'recommendations': content_result.get('recommendations', []),
                     'count': content_result.get('count', 0),
                     'algorithm': 'hybrid_fallback_to_content',
+                    'algorithmDisplay': 'Content',
                     'weights': {
                         'content_weight': 1.0,
                         'collaborative_weight': 0.0
@@ -97,6 +98,7 @@ class HybridController:
                 'recommendations': recommendations,
                 'count': len(recommendations),
                 'algorithm': 'hybrid',
+                'algorithmDisplay': 'Hybrid',
                 'weights': {
                     'content_weight': content_weight,
                     'collaborative_weight': collaborative_weight
