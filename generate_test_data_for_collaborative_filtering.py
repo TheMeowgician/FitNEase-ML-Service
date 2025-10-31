@@ -4,8 +4,10 @@ Generate Test Data for Collaborative Filtering
 
 This script generates test users and exercise ratings to enable collaborative filtering.
 
-GOAL: Create 10 test users with 8-12 exercise ratings each = 80-120 total ratings
-This will activate the hybrid collaborative filtering model.
+GOAL: Create 30 test users with 10-15 exercise ratings each = 300-450 total ratings
+This will activate robust hybrid collaborative filtering.
+
+Target: 300+ ratings from 30+ users for production-grade collaborative filtering
 """
 
 import os
@@ -110,7 +112,7 @@ def create_workout_sessions_and_ratings(tracking_conn, user_ids, exercise_ids):
         total_ratings = 0
 
         for user_id in user_ids:
-            # Each user completes 2-3 workout sessions
+            # Each user completes 2-3 workout sessions (30 users × 2.5 sessions × 5 exercises = ~375 ratings)
             num_sessions = random.randint(2, 3)
 
             for session_num in range(num_sessions):
@@ -205,11 +207,15 @@ def verify_data(auth_conn, tracking_conn):
         logger.info(f"✓ Average Rating: {stats[3]:.2f}")
         logger.info("="*60)
 
-        if stats[0] >= 50 and stats[1] >= 5:
-            logger.info("✅ SUFFICIENT DATA FOR COLLABORATIVE FILTERING!")
+        if stats[0] >= 300 and stats[1] >= 30:
+            logger.info("✅ SUFFICIENT DATA FOR ROBUST COLLABORATIVE FILTERING!")
             logger.info("🎯 Hybrid model should now activate collaborative filtering")
+            logger.info("📊 This meets production-grade requirements")
+        elif stats[0] >= 150 and stats[1] >= 15:
+            logger.info("✅ GOOD DATA FOR COLLABORATIVE FILTERING!")
+            logger.info("🎯 Hybrid model should activate, but more data = better results")
         else:
-            logger.warning(f"⚠️  Need more data: {50 - stats[0]} more ratings or {5 - stats[1]} more users")
+            logger.warning(f"⚠️  Need more data: {300 - stats[0]} more ratings or {30 - stats[1]} more users for production-grade CF")
 
         return stats[0], stats[1]
 
@@ -233,8 +239,8 @@ def main():
         tracking_conn = get_tracking_db_connection()
         logger.info("✅ Connected to both databases\n")
 
-        # Step 1: Create test users
-        user_ids = create_test_users(auth_conn, num_users=10)
+        # Step 1: Create test users (30 users for robust collaborative filtering)
+        user_ids = create_test_users(auth_conn, num_users=30)
         logger.info("")
 
         # Step 2: Get available exercises
