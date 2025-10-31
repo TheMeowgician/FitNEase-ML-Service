@@ -73,20 +73,16 @@ class FinalHybridRecommender:
             target_muscle_group,
             difficulty_level,
             equipment_needed,
-            estimated_duration_seconds as default_duration_seconds,
-            estimated_calories_per_min as calories_burned_per_minute,
-            description as instructions
+            default_duration_seconds,
+            calories_burned_per_minute,
+            instructions
         FROM exercises
         """
         self.exercises_df = pd.read_sql(exercises_query, content_conn)
 
-        # Convert difficulty_level from enum strings to numeric
-        difficulty_map = {
-            'beginner': 1,
-            'intermediate': 2,
-            'advanced': 3
-        }
-        self.exercises_df['difficulty_level'] = self.exercises_df['difficulty_level'].map(difficulty_map).fillna(2)
+        # difficulty_level is already numeric (1, 2, 3) in production database
+        # No conversion needed, but ensure it's int
+        self.exercises_df['difficulty_level'] = self.exercises_df['difficulty_level'].fillna(2).astype(int)
 
         logger.info(f"Loaded {len(self.exercises_df)} exercises")
 
