@@ -664,132 +664,238 @@ class ProperCollaborativeFiltering:
         logger.info("Fallback collaborative filtering model created")
 
 class FinalHybridRecommender:
-    """Custom hybrid recommendation class combining content-based and collaborative filtering"""
+    """Final working hybrid with proper evaluation methodology"""
 
-    def __init__(self, content_weight=0.6, collaborative_weight=0.4):
-        self.content_weight = content_weight
-        self.collaborative_weight = collaborative_weight
-        self.content_model = None
-        self.collaborative_model = None
-        self.feature_engineer = None
-        self.item_features = None
-        self.similarity_matrix = None
+    def __init__(self):
+        # Configuration (from notebook)
+        self.CONTENT_WEIGHT = 0.4  # 40%
+        self.COLLABORATIVE_WEIGHT = 0.6  # 60%
+        self.RELEVANCE_THRESHOLD = 3.5
 
-    def fit(self, content_data=None, ratings_data=None, item_features=None):
-        """Fit the hybrid model"""
-        try:
-            # Initialize content-based component
-            if content_data is not None:
-                self.feature_engineer = FitNeaseFeatureEngineer()
-                if isinstance(content_data, pd.DataFrame):
-                    self.feature_engineer.fit(content_data)
-                    features = self.feature_engineer.transform(content_data)
-                    self.similarity_matrix = cosine_similarity(features)
-                    self.item_features = content_data
+        # Data
+        self.ratings_df = None
+        self.exercises_df = None
+        self.user_item_matrix = None
 
-            # Initialize collaborative component
-            self.collaborative_model = ProperCollaborativeFiltering()
-            if ratings_data is not None:
-                self.collaborative_model.fit(ratings_data=ratings_data)
-            else:
-                self.collaborative_model.fit()
+        logger.info(f"Initialized FinalHybridRecommender")
+        logger.info(f"Content Weight: {self.CONTENT_WEIGHT} (40%)")
+        logger.info(f"Collaborative Weight: {self.COLLABORATIVE_WEIGHT} (60%)")
+        logger.info(f"Relevance Threshold: {self.RELEVANCE_THRESHOLD}+ stars")
 
-            logger.info("Hybrid recommender fitted successfully")
-            return self
+    def load_data_from_database(self, tracking_conn, content_conn):
+        """Load data from production databases"""
+        logger.info("Loading data from production databases...")
 
-        except Exception as e:
-            logger.error(f"Error fitting hybrid recommender: {e}")
-            # Initialize with defaults
-            self.collaborative_model = ProperCollaborativeFiltering()
-            self.collaborative_model.fit()
-            return self
+        # Load ratings from tracking database
+        logger.info("Fetching workout_exercise_ratings...")
+        ratings_query = """
+        SELECT
+            user_id,
+            exercise_id,
+            rating_value as rating,
+            difficulty_perceived,
+            enjoyment_rating,
+            would_do_again,
+            rated_at as timestamp
+        FROM workout_exercise_ratings
+        WHERE completed = 1
+        """
+        self.ratings_df = pd.read_sql(ratings_query, tracking_conn)
+        logger.info(f"Loaded {len(self.ratings_df)} ratings")
 
-    def predict(self, user_id, item_id, user_profile=None):
-        """Predict rating using hybrid approach"""
-        try:
-            content_score = 3.5  # Default
-            collaborative_score = 3.5  # Default
+        # Load exercises from content database
+        logger.info("Fetching exercises...")
+        exercises_query = """
+        SELECT
+            exercise_id,
+            exercise_name,
+            target_muscle_group,
+            difficulty_level,
+            equipment_needed,
+            default_duration_seconds,
+            calories_burned_per_minute,
+            instructions
+        FROM exercises
+        """
+        self.exercises_df = pd.read_sql(exercises_query, content_conn)
 
-            # Get collaborative prediction
-            if self.collaborative_model:
-                collaborative_score = self.collaborative_model.predict(user_id, item_id)
+        # difficulty_level is already numeric (1, 2, 3) in production database
+        # No conversion needed, but ensure it's int
+        self.exercises_df['difficulty_level'] = self.exercises_df['difficulty_level'].fillna(2).astype(int)
 
-            # Get content-based prediction
-            if self.similarity_matrix is not None and self.item_features is not None:
-                # Simple content-based scoring
-                content_score = 3.5  # Placeholder for content similarity
+        logger.info(f"Loaded {len(self.exercises_df)} exercises")
 
-            # Combine scores
+        # Create user-item matrix
+        self.user_item_matrix = self.ratings_df.pivot_table(
+            index='user_id',
+            columns='exercise_id',
+            values='rating',
+            fill_value=np.nan
+        )
+        logger.info(f"Matrix shape: {self.user_item_matrix.shape}")
+
+        # Calculate sparsity
+        sparsity = 1 - (self.user_item_matrix.count().sum() /
+                       (self.user_item_matrix.shape[0] * self.user_item_matrix.shape[1]))
+        logger.info(f"Matrix sparsity: {sparsity:.3f} ({sparsity*100:.1f}%)")
+
+    def get_user_context(self, user_id: int) -> Dict:
+        """Get comprehensive user context"""
+        user_ratings = self.ratings_df[self.ratings_df['user_id'] == user_id]
+
+        if user_ratings.empty:
+            return {
+                'avg_rating': 3.0,
+                'rating_count': 0,
+                'preferred_muscle_groups': ['core'],
+                'preferred_difficulty': 2,
+                'preferred_equipment': ['bodyweight']
+            }
+
+        detailed = user_ratings.merge(self.exercises_df, on='exercise_id', how='left')
+
+        avg_rating = user_ratings['rating'].mean()
+        rating_count = len(user_ratings)
+
+        muscle_groups = detailed['target_muscle_group'].value_counts().head(2).index.tolist()
+        avg_difficulty = detailed['difficulty_level'].mean()
+        equipment = detailed['equipment_needed'].value_counts().head(2).index.tolist()
+
+        return {
+            'avg_rating': avg_rating,
+            'rating_count': rating_count,
+            'preferred_muscle_groups': muscle_groups if muscle_groups else ['core'],
+            'preferred_difficulty': avg_difficulty if not pd.isna(avg_difficulty) else 2,
+            'preferred_equipment': equipment if equipment else ['bodyweight']
+        }
+
+    def calculate_cf_score(self, user_id: int, exercise_id: int, user_context: Dict) -> float:
+        """Collaborative filtering score based on user and item patterns"""
+
+        if (user_id not in self.user_item_matrix.index or
+            exercise_id not in self.user_item_matrix.columns):
+            return 0.4
+
+        if not pd.isna(self.user_item_matrix.loc[user_id, exercise_id]):
+            return 0.1
+
+        user_ratings = self.user_item_matrix.loc[user_id].dropna()
+        exercise_ratings = self.user_item_matrix[exercise_id].dropna()
+
+        if len(user_ratings) == 0 or len(exercise_ratings) == 0:
+            return 0.4
+
+        user_avg = user_ratings.mean()
+        exercise_avg = exercise_ratings.mean()
+
+        common_users = len(exercise_ratings)
+        popularity_score = min(1.0, common_users / 20)
+
+        if user_context['rating_count'] > 5:
+            prediction = 0.7 * user_avg + 0.3 * exercise_avg
+        else:
+            prediction = 0.4 * user_avg + 0.6 * exercise_avg
+
+        prediction += 0.1 * popularity_score
+
+        cf_score = (prediction - 1) / 4
+        return min(1.0, max(0.0, cf_score))
+
+    def calculate_content_score(self, user_id: int, exercise_id: int, user_context: Dict) -> float:
+        """Content-based score using exercise attributes"""
+
+        exercise_data = self.exercises_df[self.exercises_df['exercise_id'] == exercise_id]
+        if exercise_data.empty:
+            return 0.1
+
+        exercise = exercise_data.iloc[0]
+        score = 0.0
+
+        # Muscle group matching
+        if exercise['target_muscle_group'] in user_context['preferred_muscle_groups']:
+            score += 0.4
+        else:
+            muscle_compatibility = {
+                ('core', 'upper_body'): 0.15,
+                ('upper_body', 'core'): 0.15,
+                ('core', 'lower_body'): 0.1,
+                ('lower_body', 'core'): 0.1,
+                ('upper_body', 'lower_body'): 0.05,
+                ('lower_body', 'upper_body'): 0.05
+            }
+
+            for pref_muscle in user_context['preferred_muscle_groups']:
+                compatibility = muscle_compatibility.get((exercise['target_muscle_group'], pref_muscle), 0)
+                score += compatibility
+
+        # Difficulty matching
+        difficulty_diff = abs(exercise['difficulty_level'] - user_context['preferred_difficulty'])
+        if difficulty_diff == 0:
+            score += 0.25
+        elif difficulty_diff == 1:
+            score += 0.15
+        else:
+            score += max(0, 0.25 - (difficulty_diff * 0.05))
+
+        # Equipment accessibility
+        if exercise['equipment_needed'] in user_context['preferred_equipment']:
+            score += 0.2
+        elif exercise['equipment_needed'] == 'bodyweight':
+            score += 0.15
+
+        # Exercise quality indicators
+        calories_score = min(1.0, exercise['calories_burned_per_minute'] / 10)
+        duration_score = 1.0 - min(1.0, exercise['default_duration_seconds'] / 120)
+
+        score += 0.1 * calories_score
+        score += 0.05 * duration_score
+
+        return min(1.0, max(0.0, score))
+
+    def get_hybrid_recommendations(self, user_id: int, num_recs: int = 10) -> List[Dict]:
+        """Get hybrid recommendations"""
+
+        user_context = self.get_user_context(user_id)
+
+        rated_exercises = set(self.ratings_df[self.ratings_df['user_id'] == user_id]['exercise_id'].values)
+        all_exercises = self.exercises_df['exercise_id'].tolist()
+        candidate_exercises = [eid for eid in all_exercises if eid not in rated_exercises]
+
+        scored_exercises = []
+
+        for exercise_id in candidate_exercises:
+            cf_score = self.calculate_cf_score(user_id, exercise_id, user_context)
+            content_score = self.calculate_content_score(user_id, exercise_id, user_context)
+
             hybrid_score = (
-                self.content_weight * content_score +
-                self.collaborative_weight * collaborative_score
+                self.CONTENT_WEIGHT * content_score +
+                self.COLLABORATIVE_WEIGHT * cf_score
             )
 
-            return hybrid_score
+            scored_exercises.append({
+                'exercise_id': exercise_id,
+                'hybrid_score': hybrid_score,
+                'content_score': content_score,
+                'cf_score': cf_score
+            })
 
-        except Exception as e:
-            logger.error(f"Error making hybrid prediction: {e}")
-            return 3.5
+        scored_exercises.sort(key=lambda x: x['hybrid_score'], reverse=True)
 
-    def recommend(self, user_id, n_recommendations=10, user_profile=None):
-        """Generate hybrid recommendations"""
-        try:
-            recommendations = []
+        recommendations = []
+        for item in scored_exercises[:num_recs]:
+            exercise_data = self.exercises_df[self.exercises_df['exercise_id'] == item['exercise_id']].iloc[0]
 
-            # Get collaborative recommendations
-            collab_recs = []
-            if self.collaborative_model:
-                collab_recs = self.collaborative_model.recommend(user_id, n_recommendations * 2)
+            rec = {
+                'exercise_id': int(item['exercise_id']),
+                'exercise_name': str(exercise_data['exercise_name']),
+                'target_muscle_group': str(exercise_data['target_muscle_group']),
+                'difficulty_level': int(exercise_data['difficulty_level']),
+                'equipment_needed': str(exercise_data['equipment_needed']),
+                'hybrid_score': float(item['hybrid_score']),
+                'content_score': float(item['content_score']),
+                'cf_score': float(item['cf_score']),
+                'calories_burned_per_minute': float(exercise_data['calories_burned_per_minute'])
+            }
+            recommendations.append(rec)
 
-            # Generate hybrid scores
-            item_ids = set()
-
-            # Add items from collaborative filtering
-            for rec in collab_recs:
-                item_ids.add(rec['item_id'])
-
-            # Add some random items for content-based
-            for i in range(101, 151):
-                item_ids.add(i)
-
-            # Score all items
-            for item_id in list(item_ids)[:n_recommendations * 2]:
-                try:
-                    hybrid_score = self.predict(user_id, item_id, user_profile)
-                    recommendations.append({
-                        'item_id': item_id,
-                        'score': hybrid_score,
-                        'content_weight': self.content_weight,
-                        'collaborative_weight': self.collaborative_weight,
-                        'recommendation_type': 'hybrid'
-                    })
-                except:
-                    continue
-
-            # Sort by score and return top N
-            recommendations.sort(key=lambda x: x['score'], reverse=True)
-            return recommendations[:n_recommendations]
-
-        except Exception as e:
-            logger.error(f"Error generating hybrid recommendations: {e}")
-            # Return fallback recommendations
-            return [
-                {
-                    'item_id': i,
-                    'score': 3.5,
-                    'content_weight': self.content_weight,
-                    'collaborative_weight': self.collaborative_weight,
-                    'recommendation_type': 'hybrid'
-                }
-                for i in range(101, 101 + n_recommendations)
-            ]
-
-    def get_model_info(self):
-        """Get information about the hybrid model"""
-        return {
-            'content_weight': self.content_weight,
-            'collaborative_weight': self.collaborative_weight,
-            'content_model_available': self.feature_engineer is not None,
-            'collaborative_model_available': self.collaborative_model is not None,
-            'similarity_matrix_available': self.similarity_matrix is not None
-        }
+        return recommendations
