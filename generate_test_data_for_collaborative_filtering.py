@@ -119,14 +119,15 @@ def create_workout_sessions_and_ratings(tracking_conn, user_ids, exercise_ids):
 
                 session_insert = """
                 INSERT INTO workout_sessions
-                (user_id, session_type, start_time, end_time, actual_duration_minutes,
+                (user_id, workout_id, session_type, start_time, end_time, actual_duration_minutes,
                  is_completed, completion_percentage, created_at)
-                VALUES (%s, %s, %s, %s, %s, 1, 100.0, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, 1, 100.0, %s)
                 """
 
                 duration = random.randint(20, 60)
+                workout_id = random.randint(1, 100)  # Random workout ID
                 cursor.execute(session_insert, (
-                    user_id, 'general', session_date,
+                    user_id, workout_id, 'individual', session_date,
                     session_date + timedelta(minutes=duration),
                     duration, session_date
                 ))
