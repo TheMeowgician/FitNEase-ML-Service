@@ -45,7 +45,7 @@ def seed_user_behavior_patterns(connection):
     """Seed user behavior patterns table"""
     cursor = connection.cursor()
 
-    logger.info("Seeding user_behavior_patterns table...")
+    logger.info("Seeding UserBehaviorPatterns table...")
 
     # Sample user behavior data
     user_behaviors = [
@@ -124,7 +124,7 @@ def seed_user_behavior_patterns(connection):
     try:
         for behavior in user_behaviors:
             insert_query = """
-            INSERT INTO user_behavior_patterns
+            INSERT INTO UserBehaviorPatterns
             (user_id, workout_frequency, preferred_difficulty_level, preferred_duration_minutes,
              preferred_muscle_groups, preferred_equipment, engagement_score, consistency_score,
              last_workout_date, total_workouts_completed, avg_workout_rating, behavioral_cluster)
@@ -163,7 +163,7 @@ def seed_content_based_scores(connection):
     """Seed content-based scores table"""
     cursor = connection.cursor()
 
-    logger.info("Seeding content_based_scores table...")
+    logger.info("Seeding ContentBasedScores table...")
 
     # Sample content-based similarity scores
     content_scores = [
@@ -195,12 +195,12 @@ def seed_content_based_scores(connection):
     try:
         for score in content_scores:
             insert_query = """
-            INSERT INTO content_based_scores
-            (user_id, exercise_id, similarity_score, feature_weights)
+            INSERT INTO ContentBasedScores
+            (user_id, exercise_id, similarity_score, feature_vector)
             VALUES (%(user_id)s, %(exercise_id)s, %(similarity_score)s, %(feature_weights)s)
             ON DUPLICATE KEY UPDATE
                 similarity_score = VALUES(similarity_score),
-                feature_weights = VALUES(feature_weights),
+                feature_vector = VALUES(feature_vector),
                 calculated_at = CURRENT_TIMESTAMP
             """
 
@@ -220,7 +220,7 @@ def seed_collaborative_scores(connection):
     """Seed collaborative filtering scores table"""
     cursor = connection.cursor()
 
-    logger.info("Seeding collaborative_scores table...")
+    logger.info("Seeding CollaborativeScores table...")
 
     # Sample collaborative filtering scores
     collaborative_scores = [
