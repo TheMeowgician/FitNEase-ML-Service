@@ -343,10 +343,10 @@ def main():
             'description': 'FitNEase Hybrid Recommender - Production Trained'
         }
 
-        # Save model
-        model_dir = '/app/ml_models'  # Docker path
+        # Save model (model_manager loads from models_pkl directory)
+        model_dir = '/app/models_pkl'  # Docker path
         if not os.path.exists(model_dir):
-            model_dir = './ml_models'  # Local path
+            model_dir = './models_pkl'  # Local path
             os.makedirs(model_dir, exist_ok=True)
 
         model_file = os.path.join(model_dir, 'fitnease_hybrid_complete.pkl')
