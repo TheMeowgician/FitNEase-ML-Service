@@ -81,7 +81,18 @@ class HybridController:
         # Filter exact match first (highest priority)
         exact_match = [r for r in recommendations if r.get('difficulty_level') == target_difficulty]
 
-        # If we have enough exact matches, return them
+        # STRICT POLICY FOR BEGINNERS: Beginners should ONLY get beginner exercises
+        if target_difficulty == 1:
+            if len(exact_match) >= num_recommendations:
+                logger.info(f"Found {len(exact_match)} beginner exercises (exact matches)")
+                return exact_match[:num_recommendations]
+            else:
+                # If we don't have enough beginner exercises, return what we have
+                logger.warning(f"Only found {len(exact_match)} beginner exercises out of {num_recommendations} requested!")
+                logger.warning(f"This indicates the content-based model is not prioritizing beginner exercises.")
+                return exact_match[:num_recommendations] if exact_match else []
+
+        # For intermediate/advanced users, if we have enough exact matches, return them
         if len(exact_match) >= num_recommendations:
             logger.info(f"Found {len(exact_match)} exact difficulty matches")
             return exact_match[:num_recommendations]
@@ -155,10 +166,12 @@ class HybridController:
 
             # Generate hybrid recommendations with dynamic weights
             # Request more recommendations than needed to have buffer for filtering
+            # Use 10x buffer for new/beginner users to ensure we get difficulty=1 exercises
+            buffer_multiplier = 10 if user_rating_count < 5 else 5
             raw_recommendations = hybrid_model.get_recommendations(
                 user_id=user_id,
                 user_preferences=user_data.get('preferences') if user_data else None,
-                num_recommendations=num_recommendations * 3,  # 3x buffer for filtering
+                num_recommendations=num_recommendations * buffer_multiplier,
                 content_weight=content_weight,
                 collaborative_weight=collaborative_weight
             )
