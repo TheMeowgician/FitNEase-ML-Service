@@ -7,6 +7,7 @@ Generates weekly workout plans by distributing recommended exercises across user
 """
 
 import logging
+import random
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
@@ -35,7 +36,8 @@ class WeeklyPlanGenerator:
         fitness_level: str = 'beginner',
         target_muscle_groups: List[str] = None,
         goals: List[str] = None,
-        time_constraints: int = 30
+        time_constraints: int = 30,
+        week_seed: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Generate weekly workout plan for a user
@@ -47,6 +49,7 @@ class WeeklyPlanGenerator:
             target_muscle_groups: List of target muscle groups
             goals: List of fitness goals
             time_constraints: Time available per workout in minutes
+            week_seed: Optional seed for exercise variety (default: current ISO week number)
 
         Returns:
             Dictionary containing:
@@ -54,7 +57,11 @@ class WeeklyPlanGenerator:
             - metadata: Statistics about the plan
         """
         try:
-            logger.info(f"[WEEKLY_PLAN] Generating plan for user {user_id}")
+            # Calculate week seed if not provided (ensures variety across weeks)
+            if week_seed is None:
+                week_seed = datetime.now().isocalendar()[1]  # ISO week number (1-53)
+
+            logger.info(f"[WEEKLY_PLAN] Generating plan for user {user_id} (week seed: {week_seed})")
             logger.info(f"[WEEKLY_PLAN] Workout days: {workout_days}, Level: {fitness_level}")
 
             # Validate inputs
@@ -67,7 +74,8 @@ class WeeklyPlanGenerator:
 
             # Get exercise recommendations from ML model
             all_exercises = self._get_exercise_recommendations(
-                user_id, fitness_level, target_muscle_groups, goals, len(workout_days) * exercises_per_day
+                user_id, fitness_level, target_muscle_groups, goals,
+                len(workout_days) * exercises_per_day, week_seed
             )
 
             if not all_exercises:
@@ -137,7 +145,8 @@ class WeeklyPlanGenerator:
         fitness_level: str,
         target_muscle_groups: List[str],
         goals: List[str],
-        total_needed: int
+        total_needed: int,
+        week_seed: int = 1
     ) -> List[Dict[str, Any]]:
         """
         Get exercise recommendations using ML models with intelligent fallback
@@ -173,7 +182,9 @@ class WeeklyPlanGenerator:
 
                 if recommendations and len(recommendations) > 0:
                     logger.info(f"[WEEKLY_PLAN] ✅ HYBRID ML returned {len(recommendations)} exercises")
-                    return recommendations
+                    # Apply week-based shuffling for variety across weeks
+                    shuffled_recommendations = self._apply_week_variety(recommendations, week_seed)
+                    return shuffled_recommendations
                 else:
                     logger.warning(f"[WEEKLY_PLAN] Hybrid ML returned 0 recommendations (new user or insufficient data)")
 
@@ -198,7 +209,9 @@ class WeeklyPlanGenerator:
 
                 if recommendations and len(recommendations) > 0:
                     logger.info(f"[WEEKLY_PLAN] ✅ CONTENT-BASED ML returned {len(recommendations)} exercises")
-                    return recommendations
+                    # Apply week-based shuffling for variety across weeks
+                    shuffled_recommendations = self._apply_week_variety(recommendations, week_seed)
+                    return shuffled_recommendations
                 else:
                     logger.warning(f"[WEEKLY_PLAN] Content-based ML returned 0 recommendations")
 
@@ -220,6 +233,37 @@ class WeeklyPlanGenerator:
             'expert': 3
         }
         return difficulty_map.get(fitness_level.lower() if fitness_level else 'beginner', 1)
+
+    def _apply_week_variety(self, recommendations: List[Dict[str, Any]], week_seed: int) -> List[Dict[str, Any]]:
+        """
+        Apply week-based shuffling to ensure exercise variety across different weeks
+
+        Uses the week number as a seed to deterministically shuffle recommendations.
+        Same week = same shuffle order (consistent within week)
+        Different week = different shuffle order (variety across weeks)
+
+        Args:
+            recommendations: List of exercise recommendations from ML models
+            week_seed: Week number (1-53) to use as shuffle seed
+
+        Returns:
+            Shuffled list of recommendations (deterministic for same week_seed)
+        """
+        if not recommendations or len(recommendations) <= 1:
+            return recommendations
+
+        # Create a copy to avoid modifying the original list
+        shuffled = recommendations.copy()
+
+        # Use week_seed for deterministic shuffling
+        # Same week_seed = same order, different week_seed = different order
+        random.seed(week_seed)
+        random.shuffle(shuffled)
+
+        logger.info(f"[WEEKLY_PLAN] Applied week variety (seed: {week_seed})")
+        logger.info(f"[WEEKLY_PLAN] First exercise after shuffle: {shuffled[0].get('exercise_name', 'Unknown')} (ID: {shuffled[0].get('exercise_id', '?')})")
+
+        return shuffled
 
     def _get_fallback_exercises(
         self,
