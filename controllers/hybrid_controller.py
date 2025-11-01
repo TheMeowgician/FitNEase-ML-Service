@@ -57,6 +57,47 @@ class HybridController:
             # Excellent data - equal weight (Netflix-style)
             return (0.5, 0.5, "very-high")
 
+    def _filter_by_fitness_level(self, recommendations: List[Dict], user_fitness_level: str,
+                                  rf_predictor=None, num_recommendations: int = 10) -> List[Dict]:
+        """
+        Filter and rank recommendations by user's fitness level using Random Forest.
+
+        Fitness level mapping:
+        - beginner: difficulty_level = 1
+        - intermediate: difficulty_level = 2
+        - advanced/expert: difficulty_level = 3
+        """
+        # Map fitness level to difficulty
+        fitness_to_difficulty = {
+            'beginner': 1,
+            'intermediate': 2,
+            'advanced': 3,
+            'expert': 3
+        }
+
+        target_difficulty = fitness_to_difficulty.get(user_fitness_level.lower(), 1)
+        logger.info(f"Filtering recommendations for fitness level '{user_fitness_level}' (difficulty: {target_difficulty})")
+
+        # Filter exact match first (highest priority)
+        exact_match = [r for r in recommendations if r.get('difficulty_level') == target_difficulty]
+
+        # If we have enough exact matches, return them
+        if len(exact_match) >= num_recommendations:
+            logger.info(f"Found {len(exact_match)} exact difficulty matches")
+            return exact_match[:num_recommendations]
+
+        # Otherwise, allow one level up for variety (but not easier)
+        if target_difficulty < 3:
+            flexible_match = [r for r in recommendations
+                            if r.get('difficulty_level') in [target_difficulty, target_difficulty + 1]]
+        else:
+            # For advanced users, allow one level down too
+            flexible_match = [r for r in recommendations
+                            if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
+
+        logger.info(f"Found {len(flexible_match)} difficulty matches (exact + ±1 level)")
+        return flexible_match[:num_recommendations]
+
     def get_recommendations(self, user_id: int, data: Dict = None) -> Dict:
         """Main hybrid recommendations endpoint (PRIMARY ENDPOINT) - Netflix-style dynamic weighting"""
         try:
@@ -68,8 +109,15 @@ class HybridController:
             if not hybrid_model:
                 return {'error': 'Hybrid model not available'}, 503
 
+            # Get Random Forest predictor for fitness-level filtering
+            rf_predictor = current_app.model_manager.get_random_forest_model()
+
             # Get user data from auth service
             user_data = self.auth_service.get_user_profile(user_id)
+
+            # Extract fitness level (default to beginner for new users)
+            user_fitness_level = user_data.get('fitness_level', 'beginner') if user_data else 'beginner'
+            logger.info(f"User {user_id} fitness level: {user_fitness_level}")
 
             # Get user history from tracking service
             user_history = self.tracking_service.get_user_history(user_id)
@@ -106,13 +154,24 @@ class HybridController:
             exercises = self.content_service.get_exercise_attributes()
 
             # Generate hybrid recommendations with dynamic weights
-            recommendations = hybrid_model.get_recommendations(
+            # Request more recommendations than needed to have buffer for filtering
+            raw_recommendations = hybrid_model.get_recommendations(
                 user_id=user_id,
                 user_preferences=user_data.get('preferences') if user_data else None,
-                num_recommendations=num_recommendations,
+                num_recommendations=num_recommendations * 3,  # 3x buffer for filtering
                 content_weight=content_weight,
                 collaborative_weight=collaborative_weight
             )
+
+            # Filter recommendations by user's fitness level
+            logger.info(f"Got {len(raw_recommendations)} raw recommendations, filtering by fitness level...")
+            recommendations = self._filter_by_fitness_level(
+                raw_recommendations,
+                user_fitness_level,
+                rf_predictor,
+                num_recommendations
+            )
+            logger.info(f"After filtering: {len(recommendations)} recommendations matching fitness level '{user_fitness_level}'")
 
             # FALLBACK: If hybrid returns no recommendations (insufficient collaborative data),
             # automatically fallback to pure content-based recommendations
