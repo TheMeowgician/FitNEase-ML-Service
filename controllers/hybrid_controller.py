@@ -58,9 +58,13 @@ class HybridController:
             return (0.5, 0.5, "very-high")
 
     def _filter_by_fitness_level(self, recommendations: List[Dict], user_fitness_level: str,
-                                  rf_predictor=None, num_recommendations: int = 10) -> List[Dict]:
+                                  rf_predictor=None, num_recommendations: int = 10, user_profile: Dict = None) -> List[Dict]:
         """
-        Filter and rank recommendations by user's fitness level using Random Forest.
+        Filter and rank recommendations by user's fitness level using Random Forest ML model.
+
+        Two-stage process:
+        1. Rule-based filtering by difficulty level (safety filter)
+        2. ML-based ranking using Random Forest appropriateness scores
 
         Fitness level mapping:
         - beginner: difficulty_level = 1
@@ -78,36 +82,91 @@ class HybridController:
         target_difficulty = fitness_to_difficulty.get(user_fitness_level.lower(), 1)
         logger.info(f"Filtering recommendations for fitness level '{user_fitness_level}' (difficulty: {target_difficulty})")
 
+        # STAGE 1: Rule-based difficulty filtering (safety filter)
         # Filter exact match first (highest priority)
         exact_match = [r for r in recommendations if r.get('difficulty_level') == target_difficulty]
 
         # STRICT POLICY FOR BEGINNERS: Beginners should ONLY get beginner exercises
         if target_difficulty == 1:
-            if len(exact_match) >= num_recommendations:
-                logger.info(f"Found {len(exact_match)} beginner exercises (exact matches)")
-                return exact_match[:num_recommendations]
-            else:
-                # If we don't have enough beginner exercises, return what we have
-                logger.warning(f"Only found {len(exact_match)} beginner exercises out of {num_recommendations} requested!")
+            filtered_recommendations = exact_match
+            if len(filtered_recommendations) < num_recommendations:
+                logger.warning(f"Only found {len(filtered_recommendations)} beginner exercises out of {num_recommendations} requested!")
                 logger.warning(f"This indicates the content-based model is not prioritizing beginner exercises.")
-                return exact_match[:num_recommendations] if exact_match else []
-
-        # For intermediate/advanced users, if we have enough exact matches, return them
-        if len(exact_match) >= num_recommendations:
-            logger.info(f"Found {len(exact_match)} exact difficulty matches")
-            return exact_match[:num_recommendations]
-
-        # Otherwise, allow one level up for variety (but not easier)
-        if target_difficulty < 3:
-            flexible_match = [r for r in recommendations
-                            if r.get('difficulty_level') in [target_difficulty, target_difficulty + 1]]
         else:
-            # For advanced users, allow one level down too
-            flexible_match = [r for r in recommendations
-                            if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
+            # For intermediate/advanced users, allow flexible ±1 difficulty matching
+            if len(exact_match) >= num_recommendations:
+                filtered_recommendations = exact_match
+                logger.info(f"Found {len(exact_match)} exact difficulty matches")
+            else:
+                # Allow one level up for variety (but not easier)
+                if target_difficulty < 3:
+                    filtered_recommendations = [r for r in recommendations
+                                    if r.get('difficulty_level') in [target_difficulty, target_difficulty + 1]]
+                else:
+                    # For advanced users, allow one level down too
+                    filtered_recommendations = [r for r in recommendations
+                                    if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
+                logger.info(f"Found {len(filtered_recommendations)} difficulty matches (exact + ±1 level)")
 
-        logger.info(f"Found {len(flexible_match)} difficulty matches (exact + ±1 level)")
-        return flexible_match[:num_recommendations]
+        # If no recommendations after filtering, return empty list
+        if not filtered_recommendations:
+            return []
+
+        # STAGE 2: Random Forest ML-based ranking (if available)
+        if rf_predictor and user_profile:
+            try:
+                logger.info(f"Applying Random Forest ML ranking to {len(filtered_recommendations)} filtered recommendations...")
+
+                # Score each recommendation using Random Forest
+                scored_recommendations = []
+                for rec in filtered_recommendations:
+                    # Prepare workout features for RF prediction
+                    workout_features = {
+                        'difficulty_level': rec.get('difficulty_level', target_difficulty),
+                        'target_muscle_group': rec.get('target_muscle_group', 'core'),
+                        'exercise_category': rec.get('exercise_category', 'strength'),
+                        'equipment_needed': rec.get('equipment_needed', 'bodyweight'),
+                        'estimated_duration_minutes': rec.get('duration_seconds', 1800) / 60,
+                        'calories_per_minute': rec.get('calories_per_minute', 5.0),
+                        'exercise_intensity': rec.get('difficulty_level', target_difficulty)
+                    }
+
+                    # Get RF appropriateness prediction
+                    rf_prediction = rf_predictor.predict_difficulty_appropriateness(user_profile, workout_features)
+
+                    # Add RF scores to recommendation
+                    rec['rf_appropriateness_score'] = rf_prediction.get('appropriateness_score', 0.5)
+                    rec['rf_difficulty_rating'] = rf_prediction.get('difficulty_rating', 'unknown')
+                    rec['rf_suitability_class'] = rf_prediction.get('suitability_class', 1)
+                    rec['rf_confidence'] = rf_prediction.get('suitability_confidence', 0.5)
+
+                    scored_recommendations.append(rec)
+
+                # Sort by RF appropriateness score (highest first)
+                scored_recommendations.sort(key=lambda x: x.get('rf_appropriateness_score', 0.5), reverse=True)
+
+                # Log RF ranking results
+                top_scores = [f"{r.get('exercise_name', 'Unknown')[:20]}: {r.get('rf_appropriateness_score', 0):.3f}"
+                             for r in scored_recommendations[:3]]
+                logger.info(f"Random Forest ranking complete. Top 3 scores: {top_scores}")
+
+                logger.info(f"After RF ranking: Returning top {num_recommendations} recommendations")
+                return scored_recommendations[:num_recommendations]
+
+            except Exception as e:
+                logger.error(f"Error applying Random Forest ranking: {e}")
+                logger.warning("Falling back to rule-based filtering without ML ranking")
+                # Fall back to rule-based filtering
+                return filtered_recommendations[:num_recommendations]
+        else:
+            # No RF predictor available, use rule-based filtering only
+            if not rf_predictor:
+                logger.warning("Random Forest predictor not available, using rule-based filtering only")
+            if not user_profile:
+                logger.warning("User profile not available for RF prediction, using rule-based filtering only")
+
+            logger.info(f"After filtering: {len(filtered_recommendations)} recommendations matching fitness level '{user_fitness_level}'")
+            return filtered_recommendations[:num_recommendations]
 
     def get_recommendations(self, user_id: int, data: Dict = None) -> Dict:
         """Main hybrid recommendations endpoint (PRIMARY ENDPOINT) - Netflix-style dynamic weighting"""
@@ -178,11 +237,24 @@ class HybridController:
 
             # Filter recommendations by user's fitness level
             logger.info(f"Got {len(raw_recommendations)} raw recommendations, filtering by fitness level...")
+
+            # Prepare user profile for Random Forest prediction
+            rf_user_profile = {
+                'fitness_level': user_fitness_level,
+                'age': user_data.get('age', 30),
+                'bmi': user_data.get('bmi', 23.0),
+                'experience_months': user_data.get('workout_experience_years', 1) * 12,
+                'weekly_workout_frequency': user_data.get('active_days', 3),
+                'days_since_last_workout': 2,  # Default assumption
+                'fatigue_level': 1  # Default low fatigue
+            }
+
             recommendations = self._filter_by_fitness_level(
                 raw_recommendations,
                 user_fitness_level,
                 rf_predictor,
-                num_recommendations
+                num_recommendations,
+                rf_user_profile
             )
             logger.info(f"After filtering: {len(recommendations)} recommendations matching fitness level '{user_fitness_level}'")
 
