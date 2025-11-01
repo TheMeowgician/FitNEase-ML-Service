@@ -91,8 +91,9 @@ class WeeklyPlanGenerator:
 
             # Calculate metadata
             metadata = self._calculate_plan_metadata(weekly_plan_data, time_constraints)
+            metadata['week_seed'] = week_seed  # Add week seed for variety tracking
 
-            logger.info(f"[WEEKLY_PLAN] Plan generated: {metadata['total_exercises']} exercises across {len(workout_days)} days")
+            logger.info(f"[WEEKLY_PLAN] Plan generated: {metadata['total_exercises']} exercises across {len(workout_days)} days (week seed: {week_seed})")
 
             return {
                 'weekly_plan': weekly_plan_data,
