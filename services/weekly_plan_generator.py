@@ -140,6 +140,87 @@ class WeeklyPlanGenerator:
         # Return the minimum to respect both fitness level and time
         return min(exercises_by_level, max_exercises_by_time)
 
+    def _calculate_dynamic_weights(self, rating_count: int) -> tuple:
+        """
+        Calculate dynamic weights based on user rating count.
+        Industry best practice: Smooth transition like Netflix/Spotify.
+
+        Args:
+            rating_count: Number of exercise ratings the user has
+
+        Returns:
+            (content_weight, collaborative_weight, confidence_level)
+        """
+        if rating_count == 0:
+            # Brand new user - pure content-based
+            return (1.0, 0.0, "new_user")
+        elif rating_count < 3:
+            # Very early - tiny CF signal
+            return (0.95, 0.05, "low")
+        elif rating_count < 5:
+            # Building profile - growing CF
+            return (0.85, 0.15, "low-medium")
+        elif rating_count < 10:
+            # Good data - moderate CF
+            return (0.75, 0.25, "medium")
+        elif rating_count < 15:
+            # Strong data - balanced hybrid
+            return (0.65, 0.35, "medium-high")
+        elif rating_count < 20:
+            # Very strong data - CF dominant
+            return (0.55, 0.45, "high")
+        else:
+            # Excellent data - equal weight (Netflix-style)
+            return (0.5, 0.5, "very-high")
+
+    def _filter_by_fitness_level(self, recommendations: List[Dict], user_fitness_level: str,
+                                  num_recommendations: int) -> List[Dict]:
+        """
+        Filter recommendations by user's fitness level.
+
+        Fitness level mapping:
+        - beginner: difficulty_level = 1
+        - intermediate: difficulty_level = 2
+        - advanced/expert: difficulty_level = 3
+        """
+        # Map fitness level to difficulty
+        fitness_to_difficulty = {
+            'beginner': 1,
+            'intermediate': 2,
+            'advanced': 3,
+            'expert': 3
+        }
+
+        target_difficulty = fitness_to_difficulty.get(user_fitness_level.lower(), 1)
+        logger.info(f"[WEEKLY_PLAN] Filtering recommendations for fitness level '{user_fitness_level}' (difficulty: {target_difficulty})")
+
+        # Filter exact match first (highest priority)
+        exact_match = [r for r in recommendations if r.get('difficulty_level') == target_difficulty]
+
+        # STRICT POLICY FOR BEGINNERS: Beginners should ONLY get beginner exercises
+        if target_difficulty == 1:
+            filtered_recommendations = exact_match
+            if len(filtered_recommendations) < num_recommendations:
+                logger.warning(f"[WEEKLY_PLAN] Only found {len(filtered_recommendations)} beginner exercises out of {num_recommendations} requested!")
+        else:
+            # For intermediate/advanced users, allow flexible ±1 difficulty matching
+            if len(exact_match) >= num_recommendations:
+                filtered_recommendations = exact_match
+                logger.info(f"[WEEKLY_PLAN] Found {len(exact_match)} exact difficulty matches")
+            else:
+                # Allow one level up for variety (but not easier)
+                if target_difficulty < 3:
+                    filtered_recommendations = [r for r in recommendations
+                                    if r.get('difficulty_level') in [target_difficulty, target_difficulty + 1]]
+                else:
+                    # For advanced users, allow one level down too
+                    filtered_recommendations = [r for r in recommendations
+                                    if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
+                logger.info(f"[WEEKLY_PLAN] Found {len(filtered_recommendations)} difficulty matches (exact + ±1 level)")
+
+        logger.info(f"[WEEKLY_PLAN] After filtering: {len(filtered_recommendations)} recommendations matching fitness level '{user_fitness_level}'")
+        return filtered_recommendations[:num_recommendations]
+
     def _get_exercise_recommendations(
         self,
         user_id: int,
@@ -153,7 +234,7 @@ class WeeklyPlanGenerator:
         Get exercise recommendations using ML models with intelligent fallback
 
         Flow (same as Dashboard/Workouts):
-        1. Try Hybrid ML (60% content + 40% collaborative)
+        1. Try Hybrid ML with dynamic weights and fitness-level filtering
         2. If fails → Try Content-Based ML (100% content, STILL ML!)
         3. If both fail → Use hardcoded fallback (last resort)
 
@@ -165,10 +246,26 @@ class WeeklyPlanGenerator:
                 logger.error("[WEEKLY_PLAN] Model manager not available, skipping ML models")
                 return self._get_fallback_exercises(total_needed, fitness_level, target_muscle_groups)
 
+            # Get user rating count for dynamic weight calculation
+            from services.tracking_service import TrackingService
+            tracking_service = TrackingService()
+            try:
+                user_ratings = tracking_service.get_user_exercise_ratings(user_id)
+                user_rating_count = len(user_ratings) if user_ratings else 0
+            except:
+                user_rating_count = 0
+                logger.warning(f"[WEEKLY_PLAN] Could not fetch user ratings, defaulting to 0")
+
+            # Calculate dynamic weights (Netflix/Spotify approach)
+            content_weight, collaborative_weight, confidence_level = self._calculate_dynamic_weights(user_rating_count)
+            logger.info(f"[WEEKLY_PLAN] User {user_id} has {user_rating_count} ratings - Dynamic weights: Content={content_weight}, CF={collaborative_weight} (confidence: {confidence_level})")
+
             hybrid_model = self.model_manager.get_hybrid_model()
             if hybrid_model:
                 logger.info(f"[WEEKLY_PLAN] Trying HYBRID ML model for user {user_id}")
 
+                # Request 5x more recommendations to have buffer for filtering
+                buffer_multiplier = 5
                 recommendations = hybrid_model.get_recommendations(
                     user_id=user_id,
                     user_preferences={
@@ -176,16 +273,28 @@ class WeeklyPlanGenerator:
                         'target_muscle_groups': target_muscle_groups if target_muscle_groups else [],
                         'goals': goals if goals else []
                     },
-                    num_recommendations=total_needed,
-                    content_weight=0.6,
-                    collaborative_weight=0.4
+                    num_recommendations=total_needed * buffer_multiplier,
+                    content_weight=content_weight,
+                    collaborative_weight=collaborative_weight
                 )
 
                 if recommendations and len(recommendations) > 0:
-                    logger.info(f"[WEEKLY_PLAN] ✅ HYBRID ML returned {len(recommendations)} exercises")
-                    # Apply week-based shuffling for variety across weeks
-                    shuffled_recommendations = self._apply_week_variety(recommendations, week_seed)
-                    return shuffled_recommendations
+                    logger.info(f"[WEEKLY_PLAN] ✅ HYBRID ML returned {len(recommendations)} exercises before filtering")
+
+                    # Apply fitness-level filtering (STRICT for beginners)
+                    filtered_recommendations = self._filter_by_fitness_level(
+                        recommendations,
+                        fitness_level,
+                        total_needed
+                    )
+
+                    if filtered_recommendations and len(filtered_recommendations) > 0:
+                        logger.info(f"[WEEKLY_PLAN] ✅ After fitness filtering: {len(filtered_recommendations)} exercises")
+                        # Apply week-based shuffling for variety across weeks
+                        shuffled_recommendations = self._apply_week_variety(filtered_recommendations, week_seed)
+                        return shuffled_recommendations
+                    else:
+                        logger.warning(f"[WEEKLY_PLAN] Fitness filtering resulted in 0 exercises, falling back to content-based")
                 else:
                     logger.warning(f"[WEEKLY_PLAN] Hybrid ML returned 0 recommendations (new user or insufficient data)")
 
@@ -203,16 +312,29 @@ class WeeklyPlanGenerator:
                 }
 
                 # Content-based model uses user preferences for personalization
+                # Request 5x more for filtering buffer
                 recommendations = content_model.get_recommendations_by_preferences(
                     user_preferences=user_preferences,
-                    num_recommendations=total_needed
+                    num_recommendations=total_needed * 5
                 )
 
                 if recommendations and len(recommendations) > 0:
-                    logger.info(f"[WEEKLY_PLAN] ✅ CONTENT-BASED ML returned {len(recommendations)} exercises")
-                    # Apply week-based shuffling for variety across weeks
-                    shuffled_recommendations = self._apply_week_variety(recommendations, week_seed)
-                    return shuffled_recommendations
+                    logger.info(f"[WEEKLY_PLAN] ✅ CONTENT-BASED ML returned {len(recommendations)} exercises before filtering")
+
+                    # Apply fitness-level filtering (STRICT for beginners)
+                    filtered_recommendations = self._filter_by_fitness_level(
+                        recommendations,
+                        fitness_level,
+                        total_needed
+                    )
+
+                    if filtered_recommendations and len(filtered_recommendations) > 0:
+                        logger.info(f"[WEEKLY_PLAN] ✅ After fitness filtering: {len(filtered_recommendations)} exercises")
+                        # Apply week-based shuffling for variety across weeks
+                        shuffled_recommendations = self._apply_week_variety(filtered_recommendations, week_seed)
+                        return shuffled_recommendations
+                    else:
+                        logger.warning(f"[WEEKLY_PLAN] Content-based filtering resulted in 0 exercises")
                 else:
                     logger.warning(f"[WEEKLY_PLAN] Content-based ML returned 0 recommendations")
 
