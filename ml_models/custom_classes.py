@@ -1054,3 +1054,265 @@ class FinalHybridRecommender:
             recommendations.append(rec)
 
         return recommendations
+
+
+# =============================================================================
+# PRODUCTION CLASSES (for models trained on real production data)
+# =============================================================================
+
+class ProductionCollaborativeFiltering:
+    """CF model trained on production data (586 real ratings)"""
+
+    def __init__(self, min_user_ratings=3, min_exercise_ratings=2):
+        self.min_user_ratings = min_user_ratings
+        self.min_exercise_ratings = min_exercise_ratings
+        self.train_matrix = None
+        self.user_similarity = None
+        self.item_similarity = None
+        self.user_means = None
+        self.global_mean = 3.5
+        self.user_ids = []
+        self.exercise_ids = []
+
+    def fit(self, ratings_df):
+        """Train on production ratings data"""
+        logger.info("Training Production CF on real data...")
+
+        user_counts = ratings_df['user_id'].value_counts()
+        valid_users = user_counts[user_counts >= self.min_user_ratings].index
+
+        exercise_counts = ratings_df['exercise_id'].value_counts()
+        valid_exercises = exercise_counts[exercise_counts >= self.min_exercise_ratings].index
+
+        filtered_df = ratings_df[
+            (ratings_df['user_id'].isin(valid_users)) &
+            (ratings_df['exercise_id'].isin(valid_exercises))
+        ]
+
+        if len(filtered_df) < 10:
+            self.global_mean = ratings_df['rating'].mean() if len(ratings_df) > 0 else 3.5
+            return self
+
+        self.train_matrix = filtered_df.pivot_table(
+            index='user_id', columns='exercise_id',
+            values='rating', fill_value=np.nan
+        )
+
+        self.user_ids = list(self.train_matrix.index)
+        self.exercise_ids = list(self.train_matrix.columns)
+        self.global_mean = filtered_df['rating'].mean()
+        self.user_means = self.train_matrix.mean(axis=1).values
+
+        self._compute_similarities()
+        return self
+
+    def _compute_similarities(self):
+        """Compute user and item similarity matrices"""
+        matrix = self.train_matrix.values.copy()
+
+        centered = matrix.copy()
+        for i, mean in enumerate(self.user_means):
+            if not np.isnan(mean):
+                mask = ~np.isnan(matrix[i])
+                centered[i][mask] -= mean
+        centered = np.nan_to_num(centered)
+        self.user_similarity = cosine_similarity(centered)
+
+        item_matrix = matrix.T
+        item_means = np.nanmean(item_matrix, axis=1)
+        centered_items = item_matrix.copy()
+        for i, mean in enumerate(item_means):
+            if not np.isnan(mean):
+                mask = ~np.isnan(item_matrix[i])
+                centered_items[i][mask] -= mean
+        centered_items = np.nan_to_num(centered_items)
+        self.item_similarity = cosine_similarity(centered_items)
+
+    def predict(self, user_id, exercise_id):
+        """Predict rating for user-exercise pair"""
+        try:
+            if user_id not in self.user_ids or exercise_id not in self.exercise_ids:
+                return self.global_mean
+
+            user_idx = self.user_ids.index(user_id)
+            item_idx = self.exercise_ids.index(exercise_id)
+
+            user_pred = self._user_predict(user_idx, item_idx)
+            item_pred = self._item_predict(user_idx, item_idx)
+
+            return np.clip((user_pred + item_pred) / 2, 1, 5)
+        except:
+            return self.global_mean
+
+    def _user_predict(self, user_idx, item_idx):
+        if self.user_similarity is None:
+            return self.global_mean
+
+        sims = self.user_similarity[user_idx]
+        ratings = self.train_matrix.iloc[:, item_idx]
+        mask = ~ratings.isna()
+
+        if not mask.any():
+            return self.user_means[user_idx] if user_idx < len(self.user_means) else self.global_mean
+
+        s, r = sims[mask], ratings[mask].values
+        if len(s) > 20:
+            idx = np.argsort(s)[-20:]
+            s, r = s[idx], r[idx]
+
+        pos = s > 0.1
+        if pos.any() and np.sum(s[pos]) > 0:
+            return np.average(r[pos], weights=s[pos])
+        return self.global_mean
+
+    def _item_predict(self, user_idx, item_idx):
+        if self.item_similarity is None:
+            return self.global_mean
+
+        sims = self.item_similarity[item_idx]
+        ratings = self.train_matrix.iloc[user_idx]
+        mask = ~ratings.isna()
+
+        if not mask.any():
+            return self.global_mean
+
+        s, r = sims[mask], ratings[mask].values
+        if len(s) > 20:
+            idx = np.argsort(s)[-20:]
+            s, r = s[idx], r[idx]
+
+        pos = s > 0.1
+        if pos.any() and np.sum(s[pos]) > 0:
+            return np.average(r[pos], weights=s[pos])
+        return self.global_mean
+
+
+class ProductionHybridRecommender:
+    """Hybrid model trained on production data"""
+
+    def __init__(self):
+        self.CONTENT_WEIGHT = 0.4
+        self.COLLABORATIVE_WEIGHT = 0.6
+        self.RELEVANCE_THRESHOLD = 3.5
+        self.ratings_df = None
+        self.exercises_df = None
+        self.user_item_matrix = None
+        self.trained_cf_model = None
+        self.use_trained_cf = False
+
+    def fit(self, ratings_df, exercises_df, cf_model=None):
+        self.ratings_df = ratings_df.copy() if ratings_df is not None else pd.DataFrame()
+        self.exercises_df = exercises_df.copy() if exercises_df is not None else pd.DataFrame()
+
+        if cf_model:
+            self.trained_cf_model = cf_model
+            self.use_trained_cf = True
+
+        if len(self.ratings_df) > 0:
+            self.user_item_matrix = self.ratings_df.pivot_table(
+                index='user_id', columns='exercise_id',
+                values='rating', fill_value=np.nan
+            )
+        return self
+
+    def set_trained_cf_model(self, cf_model_data):
+        if cf_model_data and 'cf_model' in cf_model_data:
+            self.trained_cf_model = cf_model_data['cf_model']
+            self.use_trained_cf = True
+
+    def get_user_context(self, user_id):
+        if self.ratings_df is None or len(self.ratings_df) == 0:
+            return {'avg_rating': 3.0, 'rating_count': 0,
+                    'preferred_muscle_groups': ['core'],
+                    'preferred_difficulty': 2,
+                    'preferred_equipment': ['bodyweight']}
+
+        user_ratings = self.ratings_df[self.ratings_df['user_id'] == user_id]
+        if user_ratings.empty:
+            return {'avg_rating': 3.0, 'rating_count': 0,
+                    'preferred_muscle_groups': ['core'],
+                    'preferred_difficulty': 2,
+                    'preferred_equipment': ['bodyweight']}
+
+        if self.exercises_df is not None and len(self.exercises_df) > 0:
+            detailed = user_ratings.merge(self.exercises_df, on='exercise_id', how='left')
+            return {
+                'avg_rating': user_ratings['rating'].mean(),
+                'rating_count': len(user_ratings),
+                'preferred_muscle_groups': detailed['target_muscle_group'].value_counts().head(2).index.tolist() or ['core'],
+                'preferred_difficulty': detailed['difficulty_level'].mean() if 'difficulty_level' in detailed else 2,
+                'preferred_equipment': detailed['equipment_needed'].value_counts().head(2).index.tolist() if 'equipment_needed' in detailed else ['bodyweight']
+            }
+        return {'avg_rating': user_ratings['rating'].mean(), 'rating_count': len(user_ratings),
+                'preferred_muscle_groups': ['core'], 'preferred_difficulty': 2,
+                'preferred_equipment': ['bodyweight']}
+
+    def calculate_cf_score(self, user_id, exercise_id, user_context):
+        if self.use_trained_cf and self.trained_cf_model:
+            try:
+                pred = self.trained_cf_model.predict(user_id, exercise_id)
+                return (pred - 1) / 4
+            except:
+                pass
+        return 0.5
+
+    def calculate_content_score(self, user_id, exercise_id, user_context):
+        if self.exercises_df is None or len(self.exercises_df) == 0:
+            return 0.5
+
+        ex = self.exercises_df[self.exercises_df['exercise_id'] == exercise_id]
+        if ex.empty:
+            return 0.1
+        ex = ex.iloc[0]
+        score = 0.0
+        if ex.get('target_muscle_group') in user_context['preferred_muscle_groups']:
+            score += 0.4
+        diff = abs(ex.get('difficulty_level', 2) - user_context['preferred_difficulty'])
+        if diff <= 1:
+            score += 0.25
+        if ex.get('equipment_needed') in user_context['preferred_equipment']:
+            score += 0.2
+        elif ex.get('equipment_needed') == 'bodyweight':
+            score += 0.15
+        return min(1.0, score)
+
+    def get_hybrid_recommendations(self, user_id, num_recs=10):
+        if self.exercises_df is None or len(self.exercises_df) == 0:
+            return []
+
+        ctx = self.get_user_context(user_id)
+
+        if self.ratings_df is not None and len(self.ratings_df) > 0:
+            rated = set(self.ratings_df[self.ratings_df['user_id'] == user_id]['exercise_id'])
+        else:
+            rated = set()
+
+        candidates = [e for e in self.exercises_df['exercise_id'] if e not in rated]
+
+        scored = []
+        for eid in candidates:
+            cf = self.calculate_cf_score(user_id, eid, ctx)
+            content = self.calculate_content_score(user_id, eid, ctx)
+            hybrid = self.CONTENT_WEIGHT * content + self.COLLABORATIVE_WEIGHT * cf
+            scored.append({'exercise_id': eid, 'hybrid_score': hybrid,
+                          'content_score': content, 'cf_score': cf})
+
+        scored.sort(key=lambda x: x['hybrid_score'], reverse=True)
+
+        recs = []
+        for item in scored[:num_recs]:
+            ex = self.exercises_df[self.exercises_df['exercise_id'] == item['exercise_id']]
+            if ex.empty:
+                continue
+            ex = ex.iloc[0]
+            recs.append({
+                'exercise_id': int(item['exercise_id']),
+                'exercise_name': str(ex.get('exercise_name', 'Unknown')),
+                'target_muscle_group': str(ex.get('target_muscle_group', 'unknown')),
+                'difficulty_level': int(ex.get('difficulty_level', 2)),
+                'equipment_needed': str(ex.get('equipment_needed', 'bodyweight')),
+                'hybrid_score': float(item['hybrid_score']),
+                'content_score': float(item['content_score']),
+                'cf_score': float(item['cf_score'])
+            })
+        return recs
