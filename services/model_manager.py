@@ -11,6 +11,7 @@ import pickle
 import joblib
 from typing import Optional
 
+import sys
 from ml_models.content_based_recommender import ContentBasedRecommender
 from ml_models.collaborative_recommender import CollaborativeRecommender
 from ml_models.hybrid_recommender import HybridRecommender
@@ -19,8 +20,20 @@ from ml_models.random_forest_predictor import RandomForestPredictor
 from ml_models.custom_classes import (
     FitNeaseFeatureEngineer, ProperCollaborativeFiltering, FinalHybridRecommender,
     FitNeaseContentBasedRecommender, ContentBasedRecommenderModel, HybridRecommenderModel,
-    ContentBasedConfig, ProperCFConfig
+    ContentBasedConfig, ProperCFConfig,
+    # Production model classes (for models trained with retrain_local.py)
+    ProductionCollaborativeFiltering, ProductionHybridRecommender
 )
+
+# IMPORTANT: Inject production classes into __main__ module for pickle compatibility
+# Models pickled by retrain_local.py have classes defined in __main__, but gunicorn's
+# __main__ is different. This makes pickle.load find the classes correctly.
+main_module = sys.modules.get('__main__')
+if main_module is not None:
+    if not hasattr(main_module, 'ProductionCollaborativeFiltering'):
+        main_module.ProductionCollaborativeFiltering = ProductionCollaborativeFiltering
+    if not hasattr(main_module, 'ProductionHybridRecommender'):
+        main_module.ProductionHybridRecommender = ProductionHybridRecommender
 
 logger = logging.getLogger(__name__)
 
