@@ -598,16 +598,128 @@ class ProperCollaborativeFiltering:
             return self
 
     def predict(self, user_id, item_id):
-        """Predict rating for user-item pair"""
+        """Predict rating for user-item pair using similarity matrices or Surprise model"""
         try:
-            if self.model and self.trainset:
-                prediction = self.model.predict(user_id, item_id)
+            # Method 1: Use Surprise model if available (use getattr to avoid AttributeError)
+            model = getattr(self, 'model', None)
+            trainset = getattr(self, 'trainset', None)
+            if model is not None and trainset is not None:
+                prediction = model.predict(user_id, item_id)
                 return prediction.est
-            else:
-                return self.global_mean
+
+            # Method 2: Use similarity matrices (from trained notebook model)
+            if hasattr(self, 'train_matrix') and self.train_matrix is not None:
+                return self._predict_with_similarity(user_id, item_id)
+
+            # Fallback to global mean
+            return getattr(self, 'global_mean', 3.5)
+
         except Exception as e:
-            logger.error(f"Error making prediction: {e}")
+            logger.debug(f"Error making prediction: {e}")
+            return getattr(self, 'global_mean', 3.5)
+
+    def _predict_with_similarity(self, user_id, item_id):
+        """Predict using similarity matrices (ensemble of user-based and item-based)"""
+        try:
+            # Check if user and item exist in training data
+            if user_id not in self.train_matrix.index:
+                return self.global_mean if hasattr(self, 'global_mean') else 3.5
+            if item_id not in self.train_matrix.columns:
+                return self.global_mean if hasattr(self, 'global_mean') else 3.5
+
+            # Get indices
+            user_idx = self.train_matrix.index.get_loc(user_id)
+            item_idx = self.train_matrix.columns.get_loc(item_id)
+
+            # User-based prediction
+            user_pred = self._user_based_predict(user_idx, item_idx)
+
+            # Item-based prediction
+            item_pred = self._item_based_predict(user_idx, item_idx)
+
+            # Ensemble: average of user-based and item-based
+            prediction = (user_pred + item_pred) / 2
+            return np.clip(prediction, 1, 5)
+
+        except Exception as e:
+            logger.debug(f"Similarity prediction error: {e}")
+            return self.global_mean if hasattr(self, 'global_mean') else 3.5
+
+    def _user_based_predict(self, user_idx, item_idx):
+        """User-based collaborative filtering prediction"""
+        try:
+            if not hasattr(self, 'user_similarity') or self.user_similarity is None:
+                return self.global_mean
+
+            target_similarities = self.user_similarity[user_idx]
+            item_ratings = self.train_matrix.iloc[:, item_idx]
+
+            # Find users who rated this item
+            rated_mask = ~item_ratings.isna()
+            if not rated_mask.any():
+                return self.user_means[user_idx] if hasattr(self, 'user_means') else self.global_mean
+
+            similarities = target_similarities[rated_mask]
+            ratings = item_ratings[rated_mask].values
+
+            # Use top-k similar users
+            if len(similarities) > 50:
+                top_indices = np.argsort(similarities)[-50:]
+                similarities = similarities[top_indices]
+                ratings = ratings[top_indices]
+
+            # Filter positive similarities
+            pos_mask = similarities > 0.1
+            if not pos_mask.any():
+                return self.user_means[user_idx] if hasattr(self, 'user_means') else self.global_mean
+
+            pos_similarities = similarities[pos_mask]
+            pos_ratings = ratings[pos_mask]
+
+            if np.sum(pos_similarities) > 0:
+                return np.average(pos_ratings, weights=pos_similarities)
             return self.global_mean
+
+        except Exception:
+            return self.global_mean if hasattr(self, 'global_mean') else 3.5
+
+    def _item_based_predict(self, user_idx, item_idx):
+        """Item-based collaborative filtering prediction"""
+        try:
+            if not hasattr(self, 'item_similarity') or self.item_similarity is None:
+                return self.global_mean
+
+            target_similarities = self.item_similarity[item_idx]
+            user_ratings = self.train_matrix.iloc[user_idx]
+
+            # Find items this user rated
+            rated_mask = ~user_ratings.isna()
+            if not rated_mask.any():
+                return self.global_mean
+
+            similarities = target_similarities[rated_mask]
+            ratings = user_ratings[rated_mask].values
+
+            # Use top-k similar items
+            if len(similarities) > 50:
+                top_indices = np.argsort(similarities)[-50:]
+                similarities = similarities[top_indices]
+                ratings = ratings[top_indices]
+
+            # Filter positive similarities
+            pos_mask = similarities > 0.1
+            if not pos_mask.any():
+                return self.global_mean
+
+            pos_similarities = similarities[pos_mask]
+            pos_ratings = ratings[pos_mask]
+
+            if np.sum(pos_similarities) > 0:
+                return np.average(pos_ratings, weights=pos_similarities)
+            return self.global_mean
+
+        except Exception:
+            return self.global_mean if hasattr(self, 'global_mean') else 3.5
 
     def recommend(self, user_id, n_recommendations=10, exclude_seen=True):
         """Get recommendations for a user"""
@@ -677,10 +789,28 @@ class FinalHybridRecommender:
         self.exercises_df = None
         self.user_item_matrix = None
 
+        # Trained CF model (loaded separately for better predictions)
+        self.trained_cf_model = None
+        self.use_trained_cf = False
+
         logger.info(f"Initialized FinalHybridRecommender")
         logger.info(f"Content Weight: {self.CONTENT_WEIGHT} (40%)")
         logger.info(f"Collaborative Weight: {self.COLLABORATIVE_WEIGHT} (60%)")
         logger.info(f"Relevance Threshold: {self.RELEVANCE_THRESHOLD}+ stars")
+
+    def set_trained_cf_model(self, cf_model_data):
+        """Set the trained collaborative filtering model for better predictions"""
+        try:
+            if cf_model_data and 'cf_model' in cf_model_data:
+                self.trained_cf_model = cf_model_data['cf_model']
+                self.use_trained_cf = True
+                logger.info("Trained CF model loaded successfully - will use for hybrid recommendations")
+                logger.info(f"CF model method: {cf_model_data.get('best_method', 'ensemble')}")
+            else:
+                logger.warning("No valid CF model data provided")
+        except Exception as e:
+            logger.error(f"Error setting trained CF model: {e}")
+            self.use_trained_cf = False
 
     def load_data_from_database(self, tracking_conn, content_conn):
         """Load data from production databases"""
@@ -770,14 +900,39 @@ class FinalHybridRecommender:
         }
 
     def calculate_cf_score(self, user_id: int, exercise_id: int, user_context: Dict) -> float:
-        """Collaborative filtering score based on user and item patterns"""
+        """Collaborative filtering score based on trained CF model or fallback heuristics"""
+
+        # PRIORITY 1: Use trained CF model if available (achieves 47% hit rate)
+        if self.use_trained_cf and self.trained_cf_model is not None:
+            try:
+                # The trained CF model uses predict(user_id, item_id) method
+                # It returns a rating prediction between 1-5
+                if hasattr(self.trained_cf_model, 'predict'):
+                    predicted_rating = self.trained_cf_model.predict(user_id, exercise_id)
+                elif hasattr(self.trained_cf_model, 'predict_rating'):
+                    predicted_rating = self.trained_cf_model.predict_rating(
+                        user_id, exercise_id, method='ensemble'
+                    )
+                else:
+                    raise AttributeError("CF model has no predict method")
+
+                # Normalize to 0-1 scale (ratings are 1-5)
+                cf_score = (predicted_rating - 1) / 4
+                return min(1.0, max(0.0, cf_score))
+            except Exception as e:
+                logger.debug(f"Trained CF prediction failed for user {user_id}, exercise {exercise_id}: {e}")
+                # Fall through to heuristic method
+
+        # FALLBACK: Heuristic-based CF scoring
+        if self.user_item_matrix is None:
+            return 0.4
 
         if (user_id not in self.user_item_matrix.index or
             exercise_id not in self.user_item_matrix.columns):
             return 0.4
 
         if not pd.isna(self.user_item_matrix.loc[user_id, exercise_id]):
-            return 0.1
+            return 0.1  # Already rated - low score to avoid re-recommending
 
         user_ratings = self.user_item_matrix.loc[user_id].dropna()
         exercise_ratings = self.user_item_matrix[exercise_id].dropna()

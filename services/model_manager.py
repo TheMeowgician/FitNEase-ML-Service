@@ -102,6 +102,17 @@ class ModelManager:
                         # It's the complete hybrid model from notebook - wrap it properly
                         self.hybrid_model = HybridRecommender(hybrid_model_data)
                         logger.info("Loaded trained hybrid recommender from complete model and wrapped it")
+
+                        # IMPORTANT: Connect the trained CF model for better predictions
+                        if self.collaborative_model and self.collaborative_model.model:
+                            try:
+                                # Get the inner FinalHybridRecommender and set the CF model
+                                inner_recommender = hybrid_model_data.get('recommender')
+                                if inner_recommender and hasattr(inner_recommender, 'set_trained_cf_model'):
+                                    inner_recommender.set_trained_cf_model(self.collaborative_model.model)
+                                    logger.info("Connected trained CF model to hybrid recommender for improved accuracy")
+                            except Exception as cf_error:
+                                logger.warning(f"Could not connect CF model to hybrid: {cf_error}")
                     elif hasattr(hybrid_model_data, 'get_hybrid_recommendations'):
                         # It's already a trained hybrid model object
                         self.hybrid_model = hybrid_model_data

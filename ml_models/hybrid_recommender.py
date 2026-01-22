@@ -23,11 +23,22 @@ class HybridRecommender:
         self.hybrid_recommender = None
         self.model_info = {}
         self.model_data = None
+        self.trained_cf_model = None  # Store reference to trained CF model
 
         if model_data:
             self._load_model_data(model_data)
         else:
             self._create_fallback_model()
+
+    def set_trained_cf_model(self, cf_model_data):
+        """Connect trained CF model to improve hybrid predictions"""
+        try:
+            self.trained_cf_model = cf_model_data
+            if self.hybrid_recommender and hasattr(self.hybrid_recommender, 'set_trained_cf_model'):
+                self.hybrid_recommender.set_trained_cf_model(cf_model_data)
+                logger.info("Connected trained CF model to inner hybrid recommender")
+        except Exception as e:
+            logger.error(f"Error connecting CF model: {e}")
 
     def _load_model_data(self, model_data: Dict):
         """Load model data"""
