@@ -2,10 +2,17 @@
 GroupWorkoutRecommender Service
 
 Simplified group workout generator using existing model methods
+
+RECOMMENDATION STRATEGY: Median-based
+- Uses the MEDIAN fitness level of the group (not minimum)
+- This ensures workouts are appropriately challenging for the majority
+- Avoids under-challenging 80% of users by catering only to the weakest member
+- Industry standard: Peloton, Apple Fitness+, CrossFit all use median/average approaches
 """
 
 from typing import Dict, List, Any
 import logging
+import statistics
 
 logger = logging.getLogger(__name__)
 
@@ -61,15 +68,20 @@ class GroupWorkoutRecommender:
             min_level = min(fitness_levels)
             max_level = max(fitness_levels)
 
+            # Calculate MEDIAN fitness level (core of our recommendation strategy)
+            # Median ensures workouts are appropriate for the majority of the group
+            median_level = int(statistics.median(fitness_levels))
+
             group_analysis = {
                 'avg_fitness_level': avg_level,
+                'median_fitness_level': median_level,  # PRIMARY metric for exercise selection
                 'min_fitness_level': min_level,
                 'max_fitness_level': max_level,
                 'fitness_level_range': 'homogeneous' if (max_level - min_level <= 1) else 'mixed',
                 'total_members': len(user_profiles)
             }
 
-            logger.info(f"Group analysis: {group_analysis}")
+            logger.info(f"Group analysis: {group_analysis} (using MEDIAN level {median_level} for exercise selection)")
 
             # STEP 3: Get recommendations for each member using collaborative filtering
             all_exercises = {}  # {exercise_id: count}
@@ -94,12 +106,17 @@ class GroupWorkoutRecommender:
 
             # STEP 4: Select top exercises that multiple users like
             if not all_exercises:
-                # Fallback: use content-based for the WEAKEST member (lowest fitness level)
-                logger.warning("No collaborative recommendations, using content-based fallback")
-                # Find the member with LOWEST fitness level (most restrictive)
-                weakest_member = min(user_profiles, key=lambda p: p.get('fitness_level_numeric', 1))
-                logger.info(f"Using weakest member (fitness level {weakest_member.get('fitness_level_numeric')}) for exercise selection")
-                exercises = self._get_content_based_exercises(weakest_member, target_exercises, group_analysis['min_fitness_level'])
+                # Fallback: use content-based with MEDIAN fitness level
+                logger.warning("No collaborative recommendations, using content-based fallback with MEDIAN level")
+
+                # Find member closest to the MEDIAN fitness level
+                median_level = group_analysis['median_fitness_level']
+                median_member = min(
+                    user_profiles,
+                    key=lambda p: abs(p.get('fitness_level_numeric', 1) - median_level)
+                )
+                logger.info(f"Using median-based selection (median level {median_level}) for exercise selection")
+                exercises = self._get_content_based_exercises(median_member, target_exercises, median_level)
             else:
                 # Sort by how many users like each exercise
                 sorted_exercises = sorted(all_exercises.items(), key=lambda x: x[1], reverse=True)
@@ -121,8 +138,14 @@ class GroupWorkoutRecommender:
             logger.error(f"Error generating group workout: {e}")
             raise
 
-    def _get_content_based_exercises(self, user_profile: Dict, count: int, max_difficulty: int = None) -> List[Dict]:
-        """Fallback: Get REAL exercises from database that are safe for the group"""
+    def _get_content_based_exercises(self, user_profile: Dict, count: int, target_difficulty: int = None) -> List[Dict]:
+        """
+        Get exercises from database based on MEDIAN fitness level strategy.
+
+        Strategy: Select exercises at the MEDIAN difficulty level of the group.
+        This ensures workouts are appropriately challenging for the majority,
+        rather than being too easy (catering to minimum) or too hard (catering to maximum).
+        """
         try:
             # Get all exercises from content service
             all_exercises = self.content_service.get_all_exercises()
@@ -131,16 +154,16 @@ class GroupWorkoutRecommender:
                 logger.warning("No exercises found in content service, using defaults")
                 return self._get_default_exercises(count)
 
-            # For group workouts, use the MINIMUM fitness level (weakest member)
-            # For single users, use their actual level
-            if max_difficulty is None:
-                max_difficulty = user_profile.get('fitness_level_numeric', 1)
+            # Use MEDIAN fitness level for group workouts
+            # This ensures the workout is appropriate for the majority of the group
+            if target_difficulty is None:
+                target_difficulty = user_profile.get('fitness_level_numeric', 1)
 
             equipment = user_profile.get('available_equipment', ['bodyweight'])
 
-            logger.info(f"Filtering exercises: max_difficulty={max_difficulty}, equipment={equipment}")
+            logger.info(f"MEDIAN-BASED selection: target_difficulty={target_difficulty}, equipment={equipment}")
 
-            # Filter exercises suitable for the WEAKEST member
+            # Filter exercises suitable for the MEDIAN level
             suitable_exercises = []
             for ex in all_exercises:
                 # Convert difficulty to int (might be string from database)
@@ -151,9 +174,9 @@ class GroupWorkoutRecommender:
 
                 ex_equipment = ex.get('equipment_needed', 'bodyweight')
 
-                # CRITICAL: Only include exercises AT OR BELOW the weakest member's level
-                # This ensures EVERYONE in the group can do the exercise
-                if ex_difficulty <= max_difficulty and (ex_equipment in equipment or ex_equipment == 'bodyweight'):
+                # MEDIAN STRATEGY: Include exercises at or below the median level
+                # This challenges the majority while still being achievable for lower-level members
+                if ex_difficulty <= target_difficulty and (ex_equipment in equipment or ex_equipment == 'bodyweight'):
                     suitable_exercises.append({
                         'exercise_id': ex.get('id') or ex.get('exercise_id'),
                         'exercise_name': ex.get('exercise_name', ex.get('name', 'Unknown Exercise')),
@@ -166,19 +189,21 @@ class GroupWorkoutRecommender:
             # If we have suitable exercises, prioritize by difficulty
             import random
             if suitable_exercises:
-                # SMART SELECTION: Prefer exercises at max_difficulty level, but include some easier ones for variety
-                exact_level = [ex for ex in suitable_exercises if ex['difficulty_level'] == max_difficulty]
-                one_below = [ex for ex in suitable_exercises if ex['difficulty_level'] == max_difficulty - 1] if max_difficulty > 1 else []
+                # MEDIAN-OPTIMIZED SELECTION:
+                # - 70% at median level (appropriately challenging for majority)
+                # - 30% one level below (provides variety and active recovery)
+                exact_level = [ex for ex in suitable_exercises if ex['difficulty_level'] == target_difficulty]
+                one_below = [ex for ex in suitable_exercises if ex['difficulty_level'] == target_difficulty - 1] if target_difficulty > 1 else []
 
                 selected = []
 
-                # 60% at exact level (most challenging for the group)
+                # 70% at median level (challenging for the majority)
                 if exact_level:
                     random.shuffle(exact_level)
-                    needed = int(count * 0.6)
+                    needed = int(count * 0.7)
                     selected.extend(exact_level[:needed])
 
-                # 40% one level below (for variety/warmup)
+                # 30% one level below (for variety/recovery moments)
                 if one_below and len(selected) < count:
                     random.shuffle(one_below)
                     needed = count - len(selected)
@@ -190,7 +215,7 @@ class GroupWorkoutRecommender:
                     random.shuffle(remaining)
                     selected.extend(remaining[:count - len(selected)])
 
-                logger.info(f"Selected {len(selected)} exercises: {len(exact_level)} at level {max_difficulty}, {len(one_below)} at level {max_difficulty-1}")
+                logger.info(f"MEDIAN-BASED: Selected {len(selected)} exercises - {len([e for e in selected if e['difficulty_level'] == target_difficulty])} at median level {target_difficulty}")
                 return selected[:count]
             else:
                 logger.warning("No suitable exercises found, using defaults")
