@@ -56,7 +56,7 @@ class UserProfileBuilder:
             'user_id': user_id,
             'age': assessment.get('age', 30),
             'fitness_level_numeric': self._map_fitness_level(
-                assessment.get('experience_level', 'beginner')  # DEFAULT TO BEGINNER FOR SAFETY
+                assessment.get('fitness_level', 'beginner')  # Matches assessment_data.fitness_level
             ),
             'bmi_category_numeric': self._calculate_bmi_category(assessment),
             'user_experience': self._calculate_experience(history),
@@ -76,20 +76,33 @@ class UserProfileBuilder:
             )
 
             if response.status_code == 200:
-                data = response.json().get('data', [])
+                # API returns assessments list directly (not wrapped in 'data')
+                data = response.json()
 
                 # Handle case where data might be a list or dict
                 if isinstance(data, list):
-                    assessment = data[0] if data else {}
+                    assessment_row = data[0] if data else {}
                 elif isinstance(data, dict):
-                    assessment = data
+                    # Check if it's wrapped in 'data' key
+                    assessment_row = data.get('data', [data])[0] if data.get('data') else data
                 else:
-                    assessment = {}
+                    assessment_row = {}
+
+                # Extract assessment_data JSON field (contains fitness_level, age, etc.)
+                assessment_data = assessment_row.get('assessment_data', {})
+
+                # Handle if assessment_data is a string (JSON encoded)
+                if isinstance(assessment_data, str):
+                    import json
+                    try:
+                        assessment_data = json.loads(assessment_data)
+                    except:
+                        assessment_data = {}
 
                 # Debug log
-                exp_level = assessment.get('experience_level', 'NOT_FOUND')
-                print(f"[DEBUG] User {user_id} assessment: experience_level={exp_level}")
-                return assessment
+                fitness_level = assessment_data.get('fitness_level', 'NOT_FOUND')
+                print(f"[DEBUG] User {user_id} assessment_data: fitness_level={fitness_level}")
+                return assessment_data
 
             return {}
         except Exception as e:
