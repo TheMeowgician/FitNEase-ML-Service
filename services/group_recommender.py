@@ -63,7 +63,12 @@ class GroupWorkoutRecommender:
                 raise Exception("Failed to build any user profiles")
 
             # STEP 2: Analyze group composition
+            # Log each user's fitness level for debugging
+            for profile in user_profiles:
+                logger.info(f"  User {profile.get('user_id')}: fitness_level_numeric={profile.get('fitness_level_numeric', 'NOT SET')}")
+
             fitness_levels = [p.get('fitness_level_numeric', 1) for p in user_profiles]
+            logger.info(f"All fitness levels: {fitness_levels}")
             avg_level = sum(fitness_levels) / len(fitness_levels)
             min_level = min(fitness_levels)
             max_level = max(fitness_levels)

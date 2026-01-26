@@ -67,24 +67,33 @@ class UserProfileBuilder:
         }
 
     def _get_fitness_assessment(self, user_id: int, token: str) -> Dict[str, Any]:
-        """Fetch latest fitness assessment from auth service"""
+        """Fetch fitness assessment from auth service - specifically initial_onboarding type"""
         try:
+            # IMPORTANT: Use the type-specific endpoint to get initial_onboarding assessment
+            # This assessment contains the fitness_level field from user onboarding
             response = requests.get(
-                f"{self.auth_service_url}/api/users/{user_id}/assessments",
+                f"{self.auth_service_url}/api/users/{user_id}/assessments/initial_onboarding",
                 headers={'Authorization': f'Bearer {token}'},
                 timeout=5
             )
 
+            print(f"[DEBUG] Fetching assessment for user {user_id}, status={response.status_code}")
+
             if response.status_code == 200:
                 # API returns assessments list directly (not wrapped in 'data')
                 data = response.json()
+                print(f"[DEBUG] User {user_id} raw assessment response: {type(data)}, len={len(data) if isinstance(data, list) else 'N/A'}")
 
                 # Handle case where data might be a list or dict
                 if isinstance(data, list):
+                    # Get the first (most recent) initial_onboarding assessment
                     assessment_row = data[0] if data else {}
                 elif isinstance(data, dict):
-                    # Check if it's wrapped in 'data' key
-                    assessment_row = data.get('data', [data])[0] if data.get('data') else data
+                    # Check if it's wrapped in 'data' key (pagination response)
+                    if 'data' in data and isinstance(data['data'], list):
+                        assessment_row = data['data'][0] if data['data'] else {}
+                    else:
+                        assessment_row = data
                 else:
                     assessment_row = {}
 
@@ -99,14 +108,23 @@ class UserProfileBuilder:
                     except:
                         assessment_data = {}
 
-                # Debug log
+                # Debug log - show what we found
                 fitness_level = assessment_data.get('fitness_level', 'NOT_FOUND')
                 print(f"[DEBUG] User {user_id} assessment_data: fitness_level={fitness_level}")
+
+                if fitness_level == 'NOT_FOUND' or not fitness_level:
+                    print(f"[WARNING] User {user_id} has no fitness_level in initial_onboarding assessment!")
+                    print(f"[DEBUG] assessment_data keys: {assessment_data.keys() if assessment_data else 'empty'}")
+
                 return assessment_data
 
-            return {}
+            else:
+                print(f"[WARNING] Failed to fetch assessment for user {user_id}: HTTP {response.status_code}")
+                print(f"[DEBUG] Response body: {response.text[:200] if response.text else 'empty'}")
+                return {}
+
         except Exception as e:
-            print(f"[ERROR] Failed to fetch assessment: {e}")
+            print(f"[ERROR] Failed to fetch assessment for user {user_id}: {e}")
             # Return empty dict which will trigger 'beginner' default
             return {}
 
