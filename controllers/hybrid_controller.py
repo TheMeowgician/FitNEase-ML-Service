@@ -86,6 +86,14 @@ class HybridController:
         # Filter exact match first (highest priority)
         exact_match = [r for r in recommendations if r.get('difficulty_level') == target_difficulty]
 
+        # DEBUG: Log difficulty distribution of incoming recommendations
+        difficulty_counts = {}
+        for r in recommendations:
+            d = r.get('difficulty_level', 'unknown')
+            difficulty_counts[d] = difficulty_counts.get(d, 0) + 1
+        logger.info(f"[DEBUG] Incoming recommendations difficulty distribution: {difficulty_counts}")
+        logger.info(f"[DEBUG] Target difficulty: {target_difficulty}, Exact matches: {len(exact_match)}")
+
         # STRICT POLICY FOR BEGINNERS: Beginners should ONLY get beginner exercises
         if target_difficulty == 1:
             filtered_recommendations = exact_match
@@ -107,6 +115,13 @@ class HybridController:
                     filtered_recommendations = [r for r in recommendations
                                     if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
                 logger.info(f"Found {len(filtered_recommendations)} difficulty matches (exact + ±1 level)")
+
+        # DEBUG: Log what's being returned
+        filtered_difficulty_counts = {}
+        for r in filtered_recommendations:
+            d = r.get('difficulty_level', 'unknown')
+            filtered_difficulty_counts[d] = filtered_difficulty_counts.get(d, 0) + 1
+        logger.info(f"[DEBUG] After filtering - difficulty distribution: {filtered_difficulty_counts}")
 
         # If no recommendations after filtering, return empty list
         if not filtered_recommendations:
