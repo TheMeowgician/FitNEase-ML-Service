@@ -300,11 +300,19 @@ class HybridRecommender:
             # Use trained hybrid recommender if available (check for both method names)
             if self.hybrid_recommender and (hasattr(self.hybrid_recommender, 'get_hybrid_recommendations') or hasattr(self.hybrid_recommender, 'recommend')):
                 try:
+                    # Extract fitness level from user_preferences to pass to the hybrid model
+                    # This ensures exercises are boosted by the user's CONFIGURED fitness level
+                    target_fitness_level = None
+                    if user_preferences and 'fitness_level' in user_preferences:
+                        target_fitness_level = user_preferences['fitness_level']
+                        logger.info(f"Passing target fitness level to hybrid model: {target_fitness_level}")
+
                     # Use the loaded FinalHybridRecommender with correct method name
                     if hasattr(self.hybrid_recommender, 'get_hybrid_recommendations'):
                         recommendations = self.hybrid_recommender.get_hybrid_recommendations(
                             user_id=user_id or 1,  # Provide default user_id if none given
-                            num_recs=num_recommendations
+                            num_recs=num_recommendations,
+                            target_fitness_level=target_fitness_level
                         )
                     elif hasattr(self.hybrid_recommender, 'recommend'):
                         recommendations = self.hybrid_recommender.recommend(

@@ -983,14 +983,19 @@ class FinalHybridRecommender:
                 compatibility = muscle_compatibility.get((exercise['target_muscle_group'], pref_muscle), 0)
                 score += compatibility
 
-        # Difficulty matching
+        # Difficulty matching - give STRONG boost when target fitness level is set
         difficulty_diff = abs(exercise['difficulty_level'] - user_context['preferred_difficulty'])
+        has_target_fitness = 'target_fitness_level' in user_context
+
         if difficulty_diff == 0:
-            score += 0.25
+            # Exact match - give extra boost when target fitness level is explicitly set
+            # This ensures advanced users get difficulty 3 exercises even if they're new
+            score += 0.45 if has_target_fitness else 0.25
         elif difficulty_diff == 1:
             score += 0.15
         else:
-            score += max(0, 0.25 - (difficulty_diff * 0.05))
+            # Penalize exercises that are too far from target difficulty
+            score += max(0, 0.10 - (difficulty_diff * 0.05))
 
         # Equipment accessibility
         if exercise['equipment_needed'] in user_context['preferred_equipment']:
@@ -1007,10 +1012,31 @@ class FinalHybridRecommender:
 
         return min(1.0, max(0.0, score))
 
-    def get_hybrid_recommendations(self, user_id: int, num_recs: int = 10) -> List[Dict]:
-        """Get hybrid recommendations"""
+    def get_hybrid_recommendations(self, user_id: int, num_recs: int = 10, target_fitness_level: str = None) -> List[Dict]:
+        """Get hybrid recommendations with optional fitness level filtering
+
+        Args:
+            user_id: User ID for recommendations
+            num_recs: Number of recommendations to return
+            target_fitness_level: User's configured fitness level (beginner/intermediate/advanced)
+                                  Used to boost exercises matching the target difficulty
+        """
 
         user_context = self.get_user_context(user_id)
+
+        # Override preferred_difficulty with target fitness level if provided
+        # This ensures advanced users get difficulty 3 exercises even if they haven't rated any yet
+        if target_fitness_level:
+            fitness_to_difficulty = {
+                'beginner': 1,
+                'intermediate': 2,
+                'advanced': 3,
+                'expert': 3
+            }
+            target_difficulty = fitness_to_difficulty.get(target_fitness_level.lower(), 2)
+            user_context['preferred_difficulty'] = target_difficulty
+            user_context['target_fitness_level'] = target_fitness_level
+            logger.info(f"[HYBRID] Overriding preferred_difficulty with target fitness level: {target_fitness_level} -> difficulty {target_difficulty}")
 
         rated_exercises = set(self.ratings_df[self.ratings_df['user_id'] == user_id]['exercise_id'].values)
         all_exercises = self.exercises_df['exercise_id'].tolist()
@@ -1268,19 +1294,34 @@ class ProductionHybridRecommender:
         if ex.get('target_muscle_group') in user_context['preferred_muscle_groups']:
             score += 0.4
         diff = abs(ex.get('difficulty_level', 2) - user_context['preferred_difficulty'])
-        if diff <= 1:
-            score += 0.25
+        has_target_fitness = 'target_fitness_level' in user_context
+        if diff == 0:
+            # Exact match - give extra boost when target fitness level is explicitly set
+            score += 0.45 if has_target_fitness else 0.25
+        elif diff == 1:
+            score += 0.15
         if ex.get('equipment_needed') in user_context['preferred_equipment']:
             score += 0.2
         elif ex.get('equipment_needed') == 'bodyweight':
             score += 0.15
         return min(1.0, score)
 
-    def get_hybrid_recommendations(self, user_id, num_recs=10):
+    def get_hybrid_recommendations(self, user_id, num_recs=10, target_fitness_level=None):
         if self.exercises_df is None or len(self.exercises_df) == 0:
             return []
 
         ctx = self.get_user_context(user_id)
+
+        # Override preferred_difficulty with target fitness level if provided
+        if target_fitness_level:
+            fitness_to_difficulty = {
+                'beginner': 1,
+                'intermediate': 2,
+                'advanced': 3,
+                'expert': 3
+            }
+            ctx['preferred_difficulty'] = fitness_to_difficulty.get(target_fitness_level.lower(), 2)
+            ctx['target_fitness_level'] = target_fitness_level
 
         if self.ratings_df is not None and len(self.ratings_df) > 0:
             rated = set(self.ratings_df[self.ratings_df['user_id'] == user_id]['exercise_id'])
