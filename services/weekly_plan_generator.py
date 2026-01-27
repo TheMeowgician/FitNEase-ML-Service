@@ -396,7 +396,45 @@ class WeeklyPlanGenerator:
         logger.info(f"[WEEKLY_PLAN] Applied week variety (week_seed: {week_seed}, user_id: {user_id}, combined_seed: {combined_seed})")
         logger.info(f"[WEEKLY_PLAN] First exercise after shuffle: {shuffled[0].get('exercise_name', 'Unknown')} (ID: {shuffled[0].get('exercise_id', '?')})")
 
-        return shuffled
+        # Normalize exercise data to ensure calorie fields are present
+        return self._normalize_exercise_data(shuffled)
+
+    def _normalize_exercise_data(self, exercises: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Normalize exercise data to ensure consistent field names for calories.
+
+        The hybrid model returns 'calories_per_minute' but the Planning service
+        and client expect 'estimated_calories_per_minute' and 'estimated_calories_burned'.
+
+        Tabata protocol: 4 minutes per exercise (8 rounds × 30 seconds)
+        """
+        TABATA_DURATION_MINUTES = 4
+        DEFAULT_CALORIES_PER_MINUTE = 8  # Default if not provided
+
+        normalized = []
+        for ex in exercises:
+            # Get calories per minute from various possible field names
+            cal_per_min = (
+                ex.get('estimated_calories_per_minute') or
+                ex.get('calories_per_minute') or
+                ex.get('calories_burned_per_minute') or
+                DEFAULT_CALORIES_PER_MINUTE
+            )
+
+            # Calculate estimated calories burned for Tabata (4 min)
+            estimated_calories = int(cal_per_min * TABATA_DURATION_MINUTES)
+
+            # Create normalized exercise with all expected fields
+            normalized_ex = {
+                **ex,  # Keep all original fields
+                'estimated_calories_per_minute': cal_per_min,
+                'estimated_calories_burned': estimated_calories,
+                'default_duration_seconds': TABATA_DURATION_MINUTES * 60,  # 240 seconds
+            }
+            normalized.append(normalized_ex)
+
+        logger.info(f"[WEEKLY_PLAN] Normalized {len(normalized)} exercises with calorie data")
+        return normalized
 
     def _get_fallback_exercises(
         self,
