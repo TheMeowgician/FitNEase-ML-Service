@@ -202,21 +202,28 @@ class WeeklyPlanGenerator:
             filtered_recommendations = exact_match
             if len(filtered_recommendations) < num_recommendations:
                 logger.warning(f"[WEEKLY_PLAN] Only found {len(filtered_recommendations)} beginner exercises out of {num_recommendations} requested!")
-        else:
-            # For intermediate/advanced users, allow flexible ±1 difficulty matching
+        elif target_difficulty == 2:
+            # INTERMEDIATE: Prefer difficulty 2, allow difficulty 3 as supplement
             if len(exact_match) >= num_recommendations:
                 filtered_recommendations = exact_match
-                logger.info(f"[WEEKLY_PLAN] Found {len(exact_match)} exact difficulty matches")
+                logger.info(f"[WEEKLY_PLAN] Found {len(exact_match)} exact difficulty 2 matches for intermediate")
             else:
-                # Allow one level up for variety (but not easier)
-                if target_difficulty < 3:
-                    filtered_recommendations = [r for r in recommendations
-                                    if r.get('difficulty_level') in [target_difficulty, target_difficulty + 1]]
-                else:
-                    # For advanced users, allow one level down too
-                    filtered_recommendations = [r for r in recommendations
-                                    if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
-                logger.info(f"[WEEKLY_PLAN] Found {len(filtered_recommendations)} difficulty matches (exact + ±1 level)")
+                # Fill remaining with difficulty 3 exercises
+                remaining_needed = num_recommendations - len(exact_match)
+                harder_exercises = [r for r in recommendations if r.get('difficulty_level') == 3]
+                filtered_recommendations = exact_match + harder_exercises[:remaining_needed]
+                logger.info(f"[WEEKLY_PLAN] Intermediate: {len(exact_match)} exact + {min(remaining_needed, len(harder_exercises))} harder exercises")
+        else:
+            # ADVANCED (difficulty 3): STRICTLY prefer difficulty 3, use difficulty 2 ONLY as fallback
+            if len(exact_match) >= num_recommendations:
+                filtered_recommendations = exact_match
+                logger.info(f"[WEEKLY_PLAN] Found {len(exact_match)} exact difficulty 3 matches for advanced")
+            else:
+                # Fill remaining with difficulty 2 exercises (NOT preferred, just fallback)
+                remaining_needed = num_recommendations - len(exact_match)
+                easier_exercises = [r for r in recommendations if r.get('difficulty_level') == 2]
+                filtered_recommendations = exact_match + easier_exercises[:remaining_needed]
+                logger.info(f"[WEEKLY_PLAN] Advanced: {len(exact_match)} exact (difficulty 3) + {min(remaining_needed, len(easier_exercises))} fallback (difficulty 2)")
 
         logger.info(f"[WEEKLY_PLAN] After filtering: {len(filtered_recommendations)} recommendations matching fitness level '{user_fitness_level}'")
         return filtered_recommendations[:num_recommendations]
