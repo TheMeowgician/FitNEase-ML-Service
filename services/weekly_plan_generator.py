@@ -290,8 +290,8 @@ class WeeklyPlanGenerator:
 
                     if filtered_recommendations and len(filtered_recommendations) > 0:
                         logger.info(f"[WEEKLY_PLAN] ✅ After fitness filtering: {len(filtered_recommendations)} exercises")
-                        # Apply week-based shuffling for variety across weeks
-                        shuffled_recommendations = self._apply_week_variety(filtered_recommendations, week_seed)
+                        # Apply week-based shuffling for variety across weeks AND unique per user
+                        shuffled_recommendations = self._apply_week_variety(filtered_recommendations, week_seed, user_id)
                         return shuffled_recommendations
                     else:
                         logger.warning(f"[WEEKLY_PLAN] Fitness filtering resulted in 0 exercises, falling back to content-based")
@@ -330,8 +330,8 @@ class WeeklyPlanGenerator:
 
                     if filtered_recommendations and len(filtered_recommendations) > 0:
                         logger.info(f"[WEEKLY_PLAN] ✅ After fitness filtering: {len(filtered_recommendations)} exercises")
-                        # Apply week-based shuffling for variety across weeks
-                        shuffled_recommendations = self._apply_week_variety(filtered_recommendations, week_seed)
+                        # Apply week-based shuffling for variety across weeks AND unique per user
+                        shuffled_recommendations = self._apply_week_variety(filtered_recommendations, week_seed, user_id)
                         return shuffled_recommendations
                     else:
                         logger.warning(f"[WEEKLY_PLAN] Content-based filtering resulted in 0 exercises")
@@ -357,20 +357,22 @@ class WeeklyPlanGenerator:
         }
         return difficulty_map.get(fitness_level.lower() if fitness_level else 'beginner', 1)
 
-    def _apply_week_variety(self, recommendations: List[Dict[str, Any]], week_seed: int) -> List[Dict[str, Any]]:
+    def _apply_week_variety(self, recommendations: List[Dict[str, Any]], week_seed: int, user_id: int = 0) -> List[Dict[str, Any]]:
         """
-        Apply week-based shuffling to ensure exercise variety across different weeks
+        Apply week-based shuffling to ensure exercise variety across different weeks AND users
 
-        Uses the week number as a seed to deterministically shuffle recommendations.
-        Same week = same shuffle order (consistent within week)
-        Different week = different shuffle order (variety across weeks)
+        Uses BOTH the week number AND user_id as a combined seed to ensure:
+        - Same user, same week = same shuffle order (consistent within week for user)
+        - Same user, different week = different shuffle order (variety across weeks)
+        - Different users, same week = DIFFERENT shuffle order (unique exercises per user)
 
         Args:
             recommendations: List of exercise recommendations from ML models
             week_seed: Week number (1-53) to use as shuffle seed
+            user_id: User ID to make shuffle unique per user
 
         Returns:
-            Shuffled list of recommendations (deterministic for same week_seed)
+            Shuffled list of recommendations (deterministic for same week_seed + user_id)
         """
         if not recommendations or len(recommendations) <= 1:
             return recommendations
@@ -378,12 +380,13 @@ class WeeklyPlanGenerator:
         # Create a copy to avoid modifying the original list
         shuffled = recommendations.copy()
 
-        # Use week_seed for deterministic shuffling
-        # Same week_seed = same order, different week_seed = different order
-        random.seed(week_seed)
+        # Combine week_seed and user_id for unique shuffle per user per week
+        # This ensures different users get different exercise orders
+        combined_seed = (week_seed * 10000) + (user_id % 10000)
+        random.seed(combined_seed)
         random.shuffle(shuffled)
 
-        logger.info(f"[WEEKLY_PLAN] Applied week variety (seed: {week_seed})")
+        logger.info(f"[WEEKLY_PLAN] Applied week variety (week_seed: {week_seed}, user_id: {user_id}, combined_seed: {combined_seed})")
         logger.info(f"[WEEKLY_PLAN] First exercise after shuffle: {shuffled[0].get('exercise_name', 'Unknown')} (ID: {shuffled[0].get('exercise_id', '?')})")
 
         return shuffled
