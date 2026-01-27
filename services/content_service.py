@@ -263,7 +263,8 @@ class ContentService(BaseService):
         muscle_groups = ['core', 'upper_body', 'lower_body']
         equipment_types = ['bodyweight', 'dumbbells', 'barbell', 'kettlebell']
         categories = ['strength', 'cardio', 'flexibility', 'functional']
-        difficulty_levels = ['beginner', 'medium', 'expert']
+        # Use numeric difficulty levels (1=beginner, 2=intermediate, 3=advanced)
+        difficulty_levels = [1, 2, 3]
 
         for i in range(1, 401):  # 400 exercises to match database
             # Use real exercise names where available, generate realistic names for others

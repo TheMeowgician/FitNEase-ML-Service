@@ -125,7 +125,31 @@ class HybridRecommender:
 
                 # Ensure correct data types for numeric operations
                 self.hybrid_recommender.exercises_df['exercise_id'] = pd.to_numeric(self.hybrid_recommender.exercises_df['exercise_id'], errors='coerce')
-                self.hybrid_recommender.exercises_df['difficulty_level'] = pd.to_numeric(self.hybrid_recommender.exercises_df['difficulty_level'], errors='coerce').fillna(2).astype(int)
+
+                # Map string difficulty levels to numeric (database stores 'beginner', 'medium', 'expert')
+                difficulty_mapping = {
+                    'beginner': 1,
+                    'easy': 1,
+                    'medium': 2,
+                    'intermediate': 2,
+                    'expert': 3,
+                    'advanced': 3,
+                    'hard': 3
+                }
+                # First try to map strings, then convert to numeric for any already-numeric values
+                difficulty_col = self.hybrid_recommender.exercises_df['difficulty_level']
+                if difficulty_col.dtype == 'object':
+                    # Column contains strings - map them
+                    self.hybrid_recommender.exercises_df['difficulty_level'] = difficulty_col.str.lower().map(difficulty_mapping).fillna(2).astype(int)
+                    logger.info(f"Mapped string difficulty levels to numeric")
+                else:
+                    # Already numeric
+                    self.hybrid_recommender.exercises_df['difficulty_level'] = pd.to_numeric(difficulty_col, errors='coerce').fillna(2).astype(int)
+
+                # Log difficulty distribution
+                diff_dist = self.hybrid_recommender.exercises_df['difficulty_level'].value_counts().to_dict()
+                logger.info(f"Difficulty distribution after mapping: {diff_dist}")
+
                 self.hybrid_recommender.exercises_df['calories_burned_per_minute'] = pd.to_numeric(self.hybrid_recommender.exercises_df['calories_burned_per_minute'], errors='coerce').fillna(5.0)
                 self.hybrid_recommender.exercises_df['default_duration_seconds'] = pd.to_numeric(self.hybrid_recommender.exercises_df['default_duration_seconds'], errors='coerce').fillna(60).astype(int)
 
