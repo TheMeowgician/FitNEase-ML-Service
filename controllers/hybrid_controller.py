@@ -184,10 +184,30 @@ class HybridController:
             return filtered_recommendations[:num_recommendations]
 
     def get_recommendations(self, user_id: int, data: Dict = None) -> Dict:
-        """Main hybrid recommendations endpoint (PRIMARY ENDPOINT) - Netflix-style dynamic weighting"""
+        """
+        Main hybrid recommendations endpoint (PRIMARY ENDPOINT) - Netflix-style dynamic weighting
+
+        Supports workout customization for advanced/mentor users:
+        - include_alternatives: If True, returns additional exercises for swapping
+        - num_alternatives: Number of alternative exercises to return (default: 6)
+
+        Response structure (backward compatible):
+        - recommendations: Primary exercises (KEPT for backward compatibility)
+        - recommended_exercises: Same as recommendations (NEW)
+        - alternative_pool: Additional exercises for customization (NEW, only if include_alternatives=True)
+        - can_customize: Whether user can customize (True for advanced/mentor) (NEW)
+        """
         try:
             num_recommendations = data.get('num_recommendations', 10) if data else 10
             auth_token = data.get('auth_token') if data else None
+
+            # NEW: Parse customization parameters
+            include_alternatives = data.get('include_alternatives', False) if data else False
+            num_alternatives = data.get('num_alternatives', 6) if data else 6
+
+            # Convert string 'true'/'false' to boolean (for query params)
+            if isinstance(include_alternatives, str):
+                include_alternatives = include_alternatives.lower() == 'true'
 
             # Get hybrid model
             hybrid_model = current_app.model_manager.get_hybrid_model()
@@ -238,6 +258,17 @@ class HybridController:
             # Get exercise data from content service
             exercises = self.content_service.get_exercise_attributes()
 
+            # NEW: Determine if user can customize based on fitness level
+            # Only advanced and expert (mentor) users can customize their workouts
+            can_customize = user_fitness_level.lower() in ['advanced', 'expert']
+            logger.info(f"User {user_id} can_customize: {can_customize} (fitness_level: {user_fitness_level})")
+
+            # Calculate total exercises needed (primary + alternatives if requested)
+            total_needed = num_recommendations
+            if include_alternatives and can_customize:
+                total_needed = num_recommendations + num_alternatives
+                logger.info(f"Including alternatives: {num_recommendations} primary + {num_alternatives} alternatives = {total_needed} total")
+
             # Generate hybrid recommendations with dynamic weights
             # Request more recommendations than needed to have buffer for filtering
             # Use 10x buffer for new/beginner users to ensure we get difficulty=1 exercises
@@ -245,7 +276,7 @@ class HybridController:
             raw_recommendations = hybrid_model.get_recommendations(
                 user_id=user_id,
                 user_preferences=user_data.get('preferences') if user_data else None,
-                num_recommendations=num_recommendations * buffer_multiplier,
+                num_recommendations=total_needed * buffer_multiplier,
                 content_weight=content_weight,
                 collaborative_weight=collaborative_weight
             )
@@ -264,14 +295,24 @@ class HybridController:
                 'fatigue_level': 1  # Default low fatigue
             }
 
-            recommendations = self._filter_by_fitness_level(
+            # Filter recommendations - request total_needed to have enough for primary + alternatives
+            all_filtered_recommendations = self._filter_by_fitness_level(
                 raw_recommendations,
                 user_fitness_level,
                 rf_predictor,
-                num_recommendations,
+                total_needed,  # Request enough for both primary and alternatives
                 rf_user_profile
             )
-            logger.info(f"After filtering: {len(recommendations)} recommendations matching fitness level '{user_fitness_level}'")
+            logger.info(f"After filtering: {len(all_filtered_recommendations)} recommendations matching fitness level '{user_fitness_level}'")
+
+            # Split into primary recommendations and alternatives (if requested)
+            recommendations = all_filtered_recommendations[:num_recommendations]
+            alternative_pool = []
+
+            if include_alternatives and can_customize:
+                # Get additional exercises for the alternative pool
+                alternative_pool = all_filtered_recommendations[num_recommendations:num_recommendations + num_alternatives]
+                logger.info(f"Split: {len(recommendations)} primary, {len(alternative_pool)} alternatives")
 
             # FALLBACK: If hybrid returns no recommendations (insufficient collaborative data),
             # automatically fallback to pure content-based recommendations
@@ -288,11 +329,13 @@ class HybridController:
                 if isinstance(content_result, tuple):
                     return content_result
 
-                # Return content-based recommendations with hybrid format
-                return {
+                # Return content-based recommendations with hybrid format (backward compatible)
+                fallback_recommendations = content_result.get('recommendations', [])
+                fallback_response = {
                     'status': 'success',
                     'user_id': user_id,
-                    'recommendations': content_result.get('recommendations', []),
+                    'recommendations': fallback_recommendations,  # KEPT for backward compatibility
+                    'recommended_exercises': fallback_recommendations,  # NEW
                     'count': content_result.get('count', 0),
                     'algorithm': 'hybrid_fallback_to_content',
                     'algorithmDisplay': 'Content',
@@ -300,8 +343,16 @@ class HybridController:
                         'content_weight': 1.0,
                         'collaborative_weight': 0.0
                     },
-                    'note': 'Insufficient collaborative data, using content-based recommendations'
+                    'note': 'Insufficient collaborative data, using content-based recommendations',
+                    'can_customize': can_customize  # NEW
                 }
+
+                # Add empty alternatives if requested (fallback has no alternatives)
+                if include_alternatives:
+                    fallback_response['alternative_pool'] = []
+                    fallback_response['alternative_count'] = 0
+
+                return fallback_response
 
             # Save recommendations to database
             self._save_recommendations(user_id, recommendations, algorithm_name)
@@ -318,10 +369,12 @@ class HybridController:
                 "manual": f"Using manually specified weights (Content: {content_weight}, CF: {collaborative_weight})"
             }
 
-            return {
+            # Build response with backward compatibility
+            response = {
                 'status': 'success',
                 'user_id': user_id,
-                'recommendations': recommendations,
+                'recommendations': recommendations,  # KEPT for backward compatibility
+                'recommended_exercises': recommendations,  # NEW: Same as recommendations
                 'count': len(recommendations),
                 'algorithm': algorithm_name,
                 'algorithmDisplay': algorithm_display,
@@ -331,8 +384,17 @@ class HybridController:
                 },
                 'confidence_level': confidence_level,  # For testing/debugging
                 'rating_count': user_rating_count,     # For testing/debugging
-                'note': confidence_messages.get(confidence_level, f'{user_rating_count} ratings')
+                'note': confidence_messages.get(confidence_level, f'{user_rating_count} ratings'),
+                'can_customize': can_customize  # NEW: Whether user can customize
             }
+
+            # Add alternative pool if requested and user can customize
+            if include_alternatives:
+                response['alternative_pool'] = alternative_pool if can_customize else []
+                response['alternative_count'] = len(alternative_pool) if can_customize else 0
+                logger.info(f"Response includes alternatives: {len(response.get('alternative_pool', []))} exercises")
+
+            return response
 
         except Exception as e:
             logger.error(f"Hybrid recommendations error: {e}")

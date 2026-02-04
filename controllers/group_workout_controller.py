@@ -27,7 +27,9 @@ class GroupWorkoutController:
         {
             "user_ids": [1, 2, 3, 4],
             "workout_format": "tabata",  // or "generic"
-            "target_exercises": 8
+            "target_exercises": 8,
+            "include_alternatives": true,  // NEW: optional, for customization
+            "num_alternatives": 6           // NEW: optional, default 6
         }
 
         Returns:
@@ -35,7 +37,9 @@ class GroupWorkoutController:
             "success": true,
             "workout": {
                 "workout_format": "tabata",
-                "exercises": [...],
+                "exercises": [...],              // Primary exercises (backward compatible)
+                "recommended_exercises": [...],  // NEW: Same as exercises
+                "alternative_pool": [...],       // NEW: Additional exercises for voting
                 "group_analysis": {...},
                 "tabata_structure": {...}
             }
@@ -68,6 +72,14 @@ class GroupWorkoutController:
             workout_format = data.get('workout_format', 'tabata')
             target_exercises = int(data.get('target_exercises', 8))
 
+            # NEW: Parse customization parameters
+            include_alternatives = data.get('include_alternatives', False)
+            num_alternatives = int(data.get('num_alternatives', 6))
+
+            # Convert string 'true'/'false' to boolean (for JSON payloads)
+            if isinstance(include_alternatives, str):
+                include_alternatives = include_alternatives.lower() == 'true'
+
             # Initialize recommender with models from app
             model_manager = current_app.model_manager
             recommender = GroupWorkoutRecommender(
@@ -76,13 +88,16 @@ class GroupWorkoutController:
             )
 
             # Generate recommendations
-            logger.info(f"Generating {workout_format} workout for {len(user_ids)} users")
+            logger.info(f"Generating {workout_format} workout for {len(user_ids)} users" +
+                       (f" with {num_alternatives} alternatives" if include_alternatives else ""))
 
             workout = recommender.get_group_recommendations(
                 user_ids=user_ids,
                 token=auth_token,
                 workout_format=workout_format,
-                target_exercises=target_exercises
+                target_exercises=target_exercises,
+                include_alternatives=include_alternatives,
+                num_alternatives=num_alternatives
             )
 
             return {

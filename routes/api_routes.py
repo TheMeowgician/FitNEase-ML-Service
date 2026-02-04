@@ -140,7 +140,22 @@ def collaborative_recommendations(user_id):
 # Model 3: Hybrid Filtering Model (Main Recommendation Engine)
 @api_bp.route('/recommendations/<int:user_id>', methods=['GET'])
 def hybrid_recommendations(user_id):
-    """Main hybrid recommendations endpoint (PRIMARY ENDPOINT)"""
+    """
+    Main hybrid recommendations endpoint (PRIMARY ENDPOINT)
+
+    Query Parameters:
+    - num_recommendations (int): Number of primary exercises (default: 10)
+    - content_weight (float): Weight for content-based filtering
+    - collaborative_weight (float): Weight for collaborative filtering
+    - include_alternatives (bool): If true, include alternative exercises for customization (NEW)
+    - num_alternatives (int): Number of alternative exercises to include (default: 6) (NEW)
+
+    Response includes (when include_alternatives=true and user is advanced/mentor):
+    - recommendations: Primary exercises (backward compatible)
+    - recommended_exercises: Same as recommendations (NEW)
+    - alternative_pool: Alternative exercises for swapping (NEW)
+    - can_customize: Whether user can customize workout (NEW)
+    """
     try:
         # Extract Bearer token from request
         auth_token = None
@@ -156,6 +171,12 @@ def hybrid_recommendations(user_id):
             data['content_weight'] = float(data['content_weight'])
         if 'collaborative_weight' in data:
             data['collaborative_weight'] = float(data['collaborative_weight'])
+
+        # NEW: Parse customization parameters
+        # include_alternatives is a string from query params, controller handles conversion
+        if 'num_alternatives' in data:
+            data['num_alternatives'] = int(data['num_alternatives'])
+        # include_alternatives stays as string, controller converts to bool
 
         data['auth_token'] = auth_token  # Pass token to controller
 
@@ -485,9 +506,16 @@ def group_recommendations():
     Payload:
     {
         "user_ids": [1, 2, 3, 4],
-        "workout_format": "tabata",  // or "generic"
-        "target_exercises": 8
+        "workout_format": "tabata",       // or "generic"
+        "target_exercises": 8,
+        "include_alternatives": true,     // NEW: optional, for voting/customization
+        "num_alternatives": 6             // NEW: optional, default 6
     }
+
+    Response includes (when include_alternatives=true):
+    - exercises: Primary 8 exercises (backward compatible)
+    - recommended_exercises: Same as exercises (NEW)
+    - alternative_pool: Additional exercises for group voting (NEW)
     """
     try:
         # Extract Bearer token from request

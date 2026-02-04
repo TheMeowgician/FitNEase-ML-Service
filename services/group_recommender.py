@@ -37,7 +37,9 @@ class GroupWorkoutRecommender:
         user_ids: List[int],
         token: str,
         workout_format: str = "tabata",
-        target_exercises: int = 8
+        target_exercises: int = 8,
+        include_alternatives: bool = False,
+        num_alternatives: int = 6
     ) -> Dict[str, Any]:
         """
         Generate group workout recommendations
@@ -46,6 +48,15 @@ class GroupWorkoutRecommender:
         1. Get user profiles for fitness level analysis
         2. Use collaborative filtering to get exercises all members might like
         3. Format as Tabata workout
+
+        NEW: Workout Customization Support
+        - include_alternatives: If True, include extra exercises for voting/customization
+        - num_alternatives: Number of alternative exercises (default: 6)
+
+        Response includes (when include_alternatives=True):
+        - exercises: Primary 8 exercises (backward compatible)
+        - recommended_exercises: Same as exercises (NEW)
+        - alternative_pool: Additional exercises for voting (NEW)
         """
 
         try:
@@ -88,16 +99,22 @@ class GroupWorkoutRecommender:
 
             logger.info(f"Group analysis: {group_analysis} (using MEDIAN level {median_level} for exercise selection)")
 
+            # Calculate total exercises needed (primary + alternatives if requested)
+            total_needed = target_exercises
+            if include_alternatives:
+                total_needed = target_exercises + num_alternatives
+                logger.info(f"Including alternatives: {target_exercises} primary + {num_alternatives} alternatives = {total_needed} total")
+
             # STEP 3: Get recommendations for each member using collaborative filtering
             all_exercises = {}  # {exercise_id: count}
 
             for profile in user_profiles:
                 user_id = profile['user_id']
                 try:
-                    # Get collaborative recommendations
+                    # Get collaborative recommendations (request more to have buffer)
                     recs = self.collaborative_model.get_recommendations(
                         user_id=user_id,
-                        num_recommendations=target_exercises * 2
+                        num_recommendations=total_needed * 2
                     )
 
                     # Count exercise occurrences
@@ -121,22 +138,30 @@ class GroupWorkoutRecommender:
                     key=lambda p: abs(p.get('fitness_level_numeric', 1) - median_level)
                 )
                 logger.info(f"Using median-based selection (median level {median_level}) for exercise selection")
-                exercises = self._get_content_based_exercises(median_member, target_exercises, median_level)
+                all_selected_exercises = self._get_content_based_exercises(median_member, total_needed, median_level)
             else:
                 # Sort by how many users like each exercise
                 sorted_exercises = sorted(all_exercises.items(), key=lambda x: x[1], reverse=True)
-                selected_ids = [ex_id for ex_id, count in sorted_exercises[:target_exercises]]
+                selected_ids = [ex_id for ex_id, count in sorted_exercises[:total_needed]]
 
                 # Get exercise details
-                exercises = self._get_exercise_details(selected_ids)
+                all_selected_exercises = self._get_exercise_details(selected_ids)
+
+            # Split into primary exercises and alternatives
+            exercises = all_selected_exercises[:target_exercises]
+            alternative_pool = []
+            if include_alternatives:
+                alternative_pool = all_selected_exercises[target_exercises:target_exercises + num_alternatives]
+                logger.info(f"Split: {len(exercises)} primary, {len(alternative_pool)} alternatives")
 
             # STEP 5: Format as workout
             if workout_format == "tabata":
-                result = self._format_as_tabata(exercises, group_analysis)
+                result = self._format_as_tabata(exercises, group_analysis, alternative_pool, include_alternatives)
             else:
-                result = self._format_as_generic(exercises, group_analysis)
+                result = self._format_as_generic(exercises, group_analysis, alternative_pool, include_alternatives)
 
-            logger.info(f"Successfully generated {workout_format} workout with {len(exercises)} exercises")
+            logger.info(f"Successfully generated {workout_format} workout with {len(exercises)} exercises" +
+                       (f" and {len(alternative_pool)} alternatives" if include_alternatives else ""))
             return result
 
         except Exception as e:
@@ -287,28 +312,59 @@ class GroupWorkoutRecommender:
             })
         return exercises
 
-    def _format_as_tabata(self, exercises: List[Dict], group_analysis: Dict) -> Dict[str, Any]:
-        """Format as Tabata workout"""
-        return {
+    def _format_as_tabata(self, exercises: List[Dict], group_analysis: Dict,
+                          alternative_pool: List[Dict] = None, include_alternatives: bool = False) -> Dict[str, Any]:
+        """
+        Format as Tabata workout
+
+        NEW: Includes alternative_pool when include_alternatives=True
+        - exercises: Primary 8 exercises (backward compatible)
+        - recommended_exercises: Same as exercises (NEW)
+        - alternative_pool: Additional exercises for voting (NEW)
+        """
+        primary_exercises = exercises[:8]  # Ensure max 8 exercises
+
+        result = {
             'workout_format': 'tabata',
-            'exercises': exercises[:8],  # Ensure max 8 exercises
+            'exercises': primary_exercises,  # KEPT for backward compatibility
+            'recommended_exercises': primary_exercises,  # NEW: Same as exercises
             'group_analysis': group_analysis,
             'tabata_structure': {
                 'rounds': 8,
                 'work_duration_seconds': 20,
                 'rest_duration_seconds': 10,
-                'total_duration_minutes': len(exercises[:8]) * 4,
+                'total_duration_minutes': len(primary_exercises) * 4,
                 'exercises_per_round': 1
             }
         }
 
-    def _format_as_generic(self, exercises: List[Dict], group_analysis: Dict) -> Dict[str, Any]:
-        """Format as generic workout"""
-        return {
+        # Add alternative pool if requested
+        if include_alternatives:
+            result['alternative_pool'] = alternative_pool or []
+            result['alternative_count'] = len(alternative_pool) if alternative_pool else 0
+
+        return result
+
+    def _format_as_generic(self, exercises: List[Dict], group_analysis: Dict,
+                           alternative_pool: List[Dict] = None, include_alternatives: bool = False) -> Dict[str, Any]:
+        """
+        Format as generic workout
+
+        NEW: Includes alternative_pool when include_alternatives=True
+        """
+        result = {
             'workout_format': 'generic',
-            'exercises': exercises,
+            'exercises': exercises,  # KEPT for backward compatibility
+            'recommended_exercises': exercises,  # NEW: Same as exercises
             'group_analysis': group_analysis,
             'recommended_sets': 3,
             'recommended_reps': '8-12 or 30 seconds',
             'rest_between_exercises': '30-60 seconds'
         }
+
+        # Add alternative pool if requested
+        if include_alternatives:
+            result['alternative_pool'] = alternative_pool or []
+            result['alternative_count'] = len(alternative_pool) if alternative_pool else 0
+
+        return result
