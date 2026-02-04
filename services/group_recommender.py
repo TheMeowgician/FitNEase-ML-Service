@@ -127,6 +127,7 @@ class GroupWorkoutRecommender:
                     logger.warning(f"Failed to get recommendations for user {user_id}: {e}")
 
             # STEP 4: Select top exercises that multiple users like
+            logger.info(f"Collaborative filtering found {len(all_exercises)} unique exercises across all users")
             if not all_exercises:
                 # Fallback: use content-based with MEDIAN fitness level
                 logger.warning("No collaborative recommendations, using content-based fallback with MEDIAN level")
@@ -152,7 +153,9 @@ class GroupWorkoutRecommender:
             alternative_pool = []
             if include_alternatives:
                 alternative_pool = all_selected_exercises[target_exercises:target_exercises + num_alternatives]
-                logger.info(f"Split: {len(exercises)} primary, {len(alternative_pool)} alternatives")
+                logger.info(f"Split: {len(exercises)} primary, {len(alternative_pool)} alternatives from {len(all_selected_exercises)} total selected")
+                if len(alternative_pool) < num_alternatives:
+                    logger.warning(f"Insufficient alternatives: got {len(alternative_pool)}, wanted {num_alternatives}. Total exercises available: {len(all_selected_exercises)}")
 
             # STEP 5: Format as workout
             if workout_format == "tabata":
@@ -191,30 +194,40 @@ class GroupWorkoutRecommender:
 
             equipment = user_profile.get('available_equipment', ['bodyweight'])
 
-            logger.info(f"MEDIAN-BASED selection: target_difficulty={target_difficulty}, equipment={equipment}")
+            logger.info(f"MEDIAN-BASED selection: target_difficulty={target_difficulty}, equipment={equipment}, requesting {count} exercises")
 
             # Filter exercises suitable for the MEDIAN level
             suitable_exercises = []
             for ex in all_exercises:
-                # Convert difficulty to int (might be string from database)
-                try:
-                    ex_difficulty = int(ex.get('difficulty_level', 1))
-                except (ValueError, TypeError):
-                    ex_difficulty = 1
+                # Convert difficulty to int (handles both string names and numeric values)
+                raw_difficulty = ex.get('difficulty_level', 1)
+                ex_difficulty = self._map_difficulty_to_numeric(raw_difficulty)
 
                 ex_equipment = ex.get('equipment_needed', 'bodyweight')
+                # Normalize equipment value
+                if ex_equipment is None or ex_equipment.lower() in ['none', '']:
+                    ex_equipment = 'bodyweight'
 
                 # MEDIAN STRATEGY: Include exercises at or below the median level
                 # This challenges the majority while still being achievable for lower-level members
-                if ex_difficulty <= target_difficulty and (ex_equipment in equipment or ex_equipment == 'bodyweight'):
+                equipment_ok = ex_equipment.lower() in [e.lower() for e in equipment] or ex_equipment.lower() == 'bodyweight'
+                if ex_difficulty <= target_difficulty and equipment_ok:
                     suitable_exercises.append({
                         'exercise_id': ex.get('id') or ex.get('exercise_id'),
                         'exercise_name': ex.get('exercise_name', ex.get('name', 'Unknown Exercise')),
                         'difficulty_level': ex_difficulty,
                         'estimated_calories_burned': ex.get('estimated_calories_burned', 100),
-                        'muscle_group': ex.get('target_muscle_group', 'core'),
+                        'target_muscle_group': ex.get('target_muscle_group', 'core'),
                         'equipment_needed': ex_equipment
                     })
+
+            # Count exercises by difficulty for debugging
+            difficulty_counts = {}
+            for ex in all_exercises:
+                d = self._map_difficulty_to_numeric(ex.get('difficulty_level', 1))
+                difficulty_counts[d] = difficulty_counts.get(d, 0) + 1
+            logger.info(f"Exercise difficulty distribution: {difficulty_counts}")
+            logger.info(f"Found {len(suitable_exercises)} suitable exercises from {len(all_exercises)} total (target_diff={target_difficulty}, equipment={equipment})")
 
             # If we have suitable exercises, prioritize by difficulty
             import random
@@ -268,9 +281,9 @@ class GroupWorkoutRecommender:
                     exercises.append({
                         'exercise_id': ex_id,
                         'exercise_name': exercise_data.get('exercise_name', f'Exercise {ex_id}'),
-                        'difficulty_level': exercise_data.get('difficulty_level', 1),
+                        'difficulty_level': self._map_difficulty_to_numeric(exercise_data.get('difficulty_level', 1)),
                         'estimated_calories_burned': exercise_data.get('estimated_calories_burned', 100),
-                        'muscle_group': exercise_data.get('target_muscle_group', 'core'),
+                        'target_muscle_group': exercise_data.get('target_muscle_group', 'core'),
                         'equipment_needed': exercise_data.get('equipment_needed', 'bodyweight')
                     })
                 else:
@@ -281,7 +294,7 @@ class GroupWorkoutRecommender:
                         'exercise_name': f'Exercise {ex_id}',
                         'difficulty_level': 1,
                         'estimated_calories_burned': 100,
-                        'muscle_group': 'core'
+                        'target_muscle_group': 'core'
                     })
             except Exception as e:
                 logger.error(f"Failed to get exercise {ex_id}: {e}")
@@ -291,26 +304,81 @@ class GroupWorkoutRecommender:
                     'exercise_name': f'Exercise {ex_id}',
                     'difficulty_level': 1,
                     'estimated_calories_burned': 100,
-                    'muscle_group': 'core'
+                    'target_muscle_group': 'core'
                 })
 
         return exercises
 
     def _get_default_exercises(self, count: int) -> List[Dict]:
-        """Default exercises as last resort"""
-        default_names = ['Burpees', 'Mountain Climbers', 'Jump Squats', 'High Knees',
-                        'Push-ups', 'Plank', 'Lunges', 'Jumping Jacks']
+        """Default exercises as last resort - includes enough for alternatives"""
+        default_exercises = [
+            # Primary 8 exercises
+            {'name': 'Burpees', 'difficulty': 2, 'muscle': 'full_body', 'calories': 120},
+            {'name': 'Mountain Climbers', 'difficulty': 2, 'muscle': 'core', 'calories': 100},
+            {'name': 'Jump Squats', 'difficulty': 2, 'muscle': 'lower_body', 'calories': 110},
+            {'name': 'High Knees', 'difficulty': 1, 'muscle': 'lower_body', 'calories': 90},
+            {'name': 'Push-ups', 'difficulty': 2, 'muscle': 'upper_body', 'calories': 80},
+            {'name': 'Plank', 'difficulty': 1, 'muscle': 'core', 'calories': 50},
+            {'name': 'Lunges', 'difficulty': 1, 'muscle': 'lower_body', 'calories': 70},
+            {'name': 'Jumping Jacks', 'difficulty': 1, 'muscle': 'full_body', 'calories': 80},
+            # Alternative exercises (6 more for voting/customization)
+            {'name': 'Squats', 'difficulty': 1, 'muscle': 'lower_body', 'calories': 75},
+            {'name': 'Sit-ups', 'difficulty': 1, 'muscle': 'core', 'calories': 60},
+            {'name': 'Bicycle Crunches', 'difficulty': 2, 'muscle': 'core', 'calories': 70},
+            {'name': 'Box Jumps', 'difficulty': 3, 'muscle': 'lower_body', 'calories': 130},
+            {'name': 'Diamond Push-ups', 'difficulty': 3, 'muscle': 'upper_body', 'calories': 85},
+            {'name': 'Russian Twists', 'difficulty': 2, 'muscle': 'core', 'calories': 65},
+        ]
 
         exercises = []
-        for i in range(min(count, len(default_names))):
+        for i, ex in enumerate(default_exercises[:count]):
             exercises.append({
                 'exercise_id': i + 1,
-                'exercise_name': default_names[i],
-                'difficulty_level': 1,
-                'estimated_calories_burned': 100,
-                'muscle_group': 'core'
+                'exercise_name': ex['name'],
+                'difficulty_level': ex['difficulty'],
+                'estimated_calories_burned': ex['calories'],
+                'target_muscle_group': ex['muscle']
             })
         return exercises
+
+    def _map_difficulty_to_numeric(self, difficulty) -> int:
+        """
+        Map difficulty level to numeric value (1-3).
+        Handles both string names ('beginner', 'medium', 'expert') and numeric values.
+        """
+        if difficulty is None:
+            return 1
+
+        # If already an integer, validate and return
+        if isinstance(difficulty, int):
+            return max(1, min(3, difficulty))
+
+        # Try to convert numeric string
+        if isinstance(difficulty, str):
+            # Handle string difficulty names from content service
+            difficulty_lower = difficulty.lower().strip()
+            mapping = {
+                'beginner': 1,
+                'easy': 1,
+                'novice': 1,
+                '1': 1,
+                'medium': 2,
+                'intermediate': 2,
+                'moderate': 2,
+                '2': 2,
+                'expert': 3,
+                'advanced': 3,
+                'hard': 3,
+                'difficult': 3,
+                '3': 3,
+            }
+            return mapping.get(difficulty_lower, 1)
+
+        # Default fallback
+        try:
+            return int(difficulty)
+        except (ValueError, TypeError):
+            return 1
 
     def _format_as_tabata(self, exercises: List[Dict], group_analysis: Dict,
                           alternative_pool: List[Dict] = None, include_alternatives: bool = False) -> Dict[str, Any]:
