@@ -264,8 +264,12 @@ class WeeklyPlanGenerator:
                 filtered_recommendations = exact_match + easier_exercises[:remaining_needed]
                 logger.info(f"[WEEKLY_PLAN] Advanced: {len(exact_match)} exact (difficulty 3) + {min(remaining_needed, len(easier_exercises))} fallback (difficulty 2)")
 
-        logger.info(f"[WEEKLY_PLAN] After filtering: {len(filtered_recommendations)} recommendations matching fitness level '{user_fitness_level}'")
-        return filtered_recommendations[:num_recommendations]
+        # Return ALL exercises that pass the filter (no hard cap).
+        # The distribution algorithm needs the largest possible pool to fill
+        # every workout day, especially for 7-day plans.
+        # If the pool is still smaller than needed, Change 2 (cycling) handles it.
+        logger.info(f"[WEEKLY_PLAN] After filtering: {len(filtered_recommendations)} exercises available for '{user_fitness_level}' (pool, min needed: {num_recommendations})")
+        return filtered_recommendations
 
     def _get_exercise_recommendations(
         self,
@@ -511,11 +515,21 @@ class WeeklyPlanGenerator:
         return filtered[:count]
 
     def _group_exercises_by_muscle_group(self, exercises: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """Group exercises by their primary muscle group"""
+        """Group exercises by their primary muscle group.
+
+        Accepts both 'target_muscle_group' (content service / ML model field)
+        and 'muscle_group' (fallback / legacy field name) so the focus rotation
+        (upper_body → lower_body → core → full_body) actually works.
+        """
         grouped = {}
 
         for exercise in exercises:
-            muscle_group = exercise.get('muscle_group', 'full_body')
+            # Try both field names — content service uses 'target_muscle_group'
+            muscle_group = (
+                exercise.get('target_muscle_group')
+                or exercise.get('muscle_group')
+                or 'full_body'
+            )
 
             if muscle_group not in grouped:
                 grouped[muscle_group] = []
@@ -568,7 +582,18 @@ class WeeklyPlanGenerator:
             exercise_pool.extend(exercises)
 
         used_exercise_ids = set()
+        # Tracks how many times each exercise has been used across all days.
+        # Used by the cycling fallback so the least-repeated exercises get reused
+        # first, maximising variety when the unique pool is exhausted.
+        exercise_use_count: Dict[int, int] = {}
         workout_day_index = 0
+
+        def _get_muscle(ex: Dict) -> str:
+            return (
+                ex.get('target_muscle_group')
+                or ex.get('muscle_group')
+                or 'full_body'
+            )
 
         for day in workout_days:
             focus_area = focus_rotation[workout_day_index % len(focus_rotation)]
@@ -577,7 +602,7 @@ class WeeklyPlanGenerator:
             day_exercises = []
             focus_areas_set = set()
 
-            # Try to get exercises matching focus area first
+            # ── Pass 1: Focus-area exercises not yet used this week ────────────
             focus_exercises = grouped_exercises.get(focus_area, [])
 
             for exercise in focus_exercises:
@@ -587,9 +612,10 @@ class WeeklyPlanGenerator:
                 if exercise['exercise_id'] not in used_exercise_ids:
                     day_exercises.append(exercise)
                     used_exercise_ids.add(exercise['exercise_id'])
-                    focus_areas_set.add(exercise.get('muscle_group', focus_area))
+                    exercise_use_count[exercise['exercise_id']] = 1
+                    focus_areas_set.add(_get_muscle(exercise))
 
-            # Fill remaining slots with any available exercises
+            # ── Pass 2: Any pool exercise not yet used this week ───────────────
             if len(day_exercises) < exercises_per_day:
                 for exercise in exercise_pool:
                     if len(day_exercises) >= exercises_per_day:
@@ -598,7 +624,34 @@ class WeeklyPlanGenerator:
                     if exercise['exercise_id'] not in used_exercise_ids:
                         day_exercises.append(exercise)
                         used_exercise_ids.add(exercise['exercise_id'])
-                        focus_areas_set.add(exercise.get('muscle_group', 'full_body'))
+                        exercise_use_count[exercise['exercise_id']] = 1
+                        focus_areas_set.add(_get_muscle(exercise))
+
+            # ── Pass 3: Cycling fallback (pool exhausted) ─────────────────────
+            # When the unique pool runs out (common with 7-day plans or
+            # progressive overload counts), allow exercise reuse.
+            # Sort by use count ascending so the least-repeated exercises
+            # are picked first — maximises perceived variety.
+            if len(day_exercises) < exercises_per_day:
+                already_in_today = {ex['exercise_id'] for ex in day_exercises}
+                sorted_by_use = sorted(
+                    exercise_pool,
+                    key=lambda ex: exercise_use_count.get(ex['exercise_id'], 0)
+                )
+                for exercise in sorted_by_use:
+                    if len(day_exercises) >= exercises_per_day:
+                        break
+                    ex_id = exercise['exercise_id']
+                    if ex_id not in already_in_today:   # never repeat within same day
+                        day_exercises.append(exercise)
+                        exercise_use_count[ex_id] = exercise_use_count.get(ex_id, 0) + 1
+                        focus_areas_set.add(_get_muscle(exercise))
+
+                if len(day_exercises) < exercises_per_day:
+                    logger.warning(
+                        f"[WEEKLY_PLAN] Could only fill {len(day_exercises)}/{exercises_per_day} "
+                        f"exercises for {day} even after cycling — exercise pool too small."
+                    )
 
             # Calculate duration and calories (Tabata: 4 min per exercise)
             duration = len(day_exercises) * 4
