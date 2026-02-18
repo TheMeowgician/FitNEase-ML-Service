@@ -14,6 +14,8 @@ from typing import Dict, List, Any
 import logging
 import statistics
 
+from config.progressive_overload import get_exercise_count_from_numeric
+
 logger = logging.getLogger(__name__)
 
 
@@ -392,27 +394,7 @@ class GroupWorkoutRecommender:
           Intermediate (3): 0-5 sessions→6, 6-15→7, 16+→8
           Advanced (5):     0-5 sessions→8, 6-15→10, 16+→12
         """
-        if median_fitness_level <= 1:  # Beginner
-            if median_sessions < 6:
-                return 4
-            elif median_sessions < 16:
-                return 5
-            else:
-                return 6
-        elif median_fitness_level <= 3:  # Intermediate
-            if median_sessions < 6:
-                return 6
-            elif median_sessions < 16:
-                return 7
-            else:
-                return 8
-        else:  # Advanced (5)
-            if median_sessions < 6:
-                return 8
-            elif median_sessions < 16:
-                return 10
-            else:
-                return 12
+        return get_exercise_count_from_numeric(median_fitness_level, median_sessions)
 
     def _map_fitness_to_exercise_difficulty(self, fitness_level_numeric: int) -> int:
         """

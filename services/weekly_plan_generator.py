@@ -11,6 +11,8 @@ import random
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
+from config.progressive_overload import get_exercise_count
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,29 +149,7 @@ class WeeklyPlanGenerator:
         """
         level = (fitness_level or 'beginner').lower()
 
-        if level == 'beginner':
-            if session_count < 6:
-                base_exercises = 4
-            elif session_count < 16:
-                base_exercises = 5
-            else:
-                base_exercises = 6
-        elif level in ('intermediate', 'medium'):
-            if session_count < 6:
-                base_exercises = 6
-            elif session_count < 16:
-                base_exercises = 7
-            else:
-                base_exercises = 8
-        elif level in ('advanced', 'expert'):
-            if session_count < 6:
-                base_exercises = 8
-            elif session_count < 16:
-                base_exercises = 10
-            else:
-                base_exercises = 12
-        else:
-            base_exercises = 4  # Default to beginner
+        base_exercises = get_exercise_count(level, session_count)
 
         logger.info(f"[WEEKLY_PLAN] Progressive overload: level={level}, sessions={session_count} → {base_exercises} exercises/day")
 
