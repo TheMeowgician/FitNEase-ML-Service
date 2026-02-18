@@ -215,11 +215,12 @@ class TrackingService(BaseService):
     def get_user_workout_sessions(self, user_id: int, limit: int = 50) -> Optional[List[Dict]]:
         """Get user workout sessions"""
         try:
-            params = {'limit': limit}
-            response = self.get(f'/tracking/user-sessions/{user_id}', params=params)
+            params = {'per_page': limit}
+            response = self.get(f'/api/ml-internal/user-sessions/{user_id}', params=params)
 
             if self.validate_response(response):
-                return response.get('sessions', [])
+                # Laravel pagination wraps results: { data: { data: [...], total: N } }
+                return response.get('data', {}).get('data', [])
 
             return self._get_mock_user_sessions(user_id, limit)
 
