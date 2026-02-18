@@ -69,8 +69,9 @@ class WeeklyPlanGenerator:
             if not workout_days:
                 raise ValueError("At least one workout day must be specified")
 
-            # Determine exercises per day based on fitness level and time
-            exercises_per_day = self._calculate_exercises_per_day(fitness_level, time_constraints)
+            # Determine exercises per day based on fitness level, time, and session count (progressive overload)
+            session_count = self._get_user_session_count(user_id)
+            exercises_per_day = self._calculate_exercises_per_day(fitness_level, time_constraints, session_count)
 
             # Get exercise recommendations from ML model
             all_exercises = self._get_exercise_recommendations(
@@ -119,26 +120,64 @@ class WeeklyPlanGenerator:
 
         return validated
 
-    def _calculate_exercises_per_day(self, fitness_level: str, time_constraints: int) -> int:
+    def _get_user_session_count(self, user_id: int) -> int:
+        """Get count of individual workout sessions completed by user (for progressive overload)"""
+        try:
+            from services.tracking_service import TrackingService
+            tracking_service = TrackingService()
+            sessions = tracking_service.get_user_workout_sessions(user_id, limit=50)
+            if not sessions:
+                return 0
+            # Count only individual sessions
+            return sum(1 for s in sessions if s.get('session_type', 'individual') != 'group')
+        except Exception as e:
+            logger.warning(f"[WEEKLY_PLAN] Could not get session count for user {user_id}: {e}")
+            return 0
+
+    def _calculate_exercises_per_day(self, fitness_level: str, time_constraints: int, session_count: int = 0) -> int:
         """
-        Calculate how many exercises fit in the time constraint
+        Calculate how many exercises fit using progressive overload.
 
         Tabata: 4 minutes per exercise (8 rounds × 30s)
-        """
-        # Base exercises per day by fitness level
-        base_exercises = {
-            'beginner': 4,
-            'intermediate': 5,
-            'advanced': 6
-        }
 
-        exercises_by_level = base_exercises.get(fitness_level, 4)
+        Progressive overload ranges (per professor requirements):
+          Beginner:     0-5 sessions→4, 6-15→5, 16+→6
+          Intermediate: 0-5 sessions→6, 6-15→7, 16+→8
+          Advanced:     0-5 sessions→8, 6-15→10, 16+→12
+        """
+        level = (fitness_level or 'beginner').lower()
+
+        if level == 'beginner':
+            if session_count < 6:
+                base_exercises = 4
+            elif session_count < 16:
+                base_exercises = 5
+            else:
+                base_exercises = 6
+        elif level in ('intermediate', 'medium'):
+            if session_count < 6:
+                base_exercises = 6
+            elif session_count < 16:
+                base_exercises = 7
+            else:
+                base_exercises = 8
+        elif level in ('advanced', 'expert'):
+            if session_count < 6:
+                base_exercises = 8
+            elif session_count < 16:
+                base_exercises = 10
+            else:
+                base_exercises = 12
+        else:
+            base_exercises = 4  # Default to beginner
+
+        logger.info(f"[WEEKLY_PLAN] Progressive overload: level={level}, sessions={session_count} → {base_exercises} exercises/day")
 
         # Adjust for time constraints (4 min per exercise in Tabata)
         max_exercises_by_time = time_constraints // 4
 
         # Return the minimum to respect both fitness level and time
-        return min(exercises_by_level, max_exercises_by_time)
+        return min(base_exercises, max_exercises_by_time)
 
     def _calculate_dynamic_weights(self, rating_count: int) -> tuple:
         """

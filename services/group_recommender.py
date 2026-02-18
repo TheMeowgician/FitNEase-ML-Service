@@ -99,6 +99,38 @@ class GroupWorkoutRecommender:
 
             logger.info(f"Group analysis: {group_analysis} (using MEDIAN level {median_level} for exercise selection)")
 
+            # PROGRESSIVE OVERLOAD: Get session counts per user to determine exercise count
+            try:
+                from services.tracking_service import TrackingService
+                tracking_service = TrackingService()
+                session_counts = []
+                for uid in user_ids:
+                    try:
+                        sessions = tracking_service.get_user_workout_sessions(uid, limit=50)
+                        individual_count = sum(
+                            1 for s in (sessions or [])
+                            if s.get('session_type', 'individual') != 'group'
+                        )
+                        session_counts.append(individual_count)
+                    except Exception as e:
+                        logger.warning(f"Could not get session count for user {uid}: {e}")
+                        session_counts.append(0)
+                median_sessions = int(statistics.median(session_counts)) if session_counts else 0
+            except Exception as e:
+                logger.warning(f"Could not fetch session counts, defaulting to 0: {e}")
+                median_sessions = 0
+
+            # Override target_exercises with progressive overload (ignore client-supplied value)
+            target_exercises = self._calculate_group_exercise_count(median_level, median_sessions)
+
+            # Map fitness_level_numeric (1/3/5) → exercise difficulty (1/2/3)
+            exercise_difficulty = self._map_fitness_to_exercise_difficulty(median_level)
+
+            logger.info(
+                f"Progressive overload: median_level={median_level}, median_sessions={median_sessions}"
+                f" → {target_exercises} exercises at exercise_difficulty={exercise_difficulty}"
+            )
+
             # Calculate total exercises needed (primary + alternatives if requested)
             total_needed = target_exercises
             if include_alternatives:
@@ -133,20 +165,29 @@ class GroupWorkoutRecommender:
                 logger.warning("No collaborative recommendations, using content-based fallback with MEDIAN level")
 
                 # Find member closest to the MEDIAN fitness level
-                median_level = group_analysis['median_fitness_level']
                 median_member = min(
                     user_profiles,
                     key=lambda p: abs(p.get('fitness_level_numeric', 1) - median_level)
                 )
-                logger.info(f"Using median-based selection (median level {median_level}) for exercise selection")
-                all_selected_exercises = self._get_content_based_exercises(median_member, total_needed, median_level)
+                logger.info(f"Using median-based selection (median level {median_level}, exercise_difficulty={exercise_difficulty}) for exercise selection")
+                # Pass exercise_difficulty (1/2/3) — NOT median_level (1/3/5)
+                all_selected_exercises = self._get_content_based_exercises(median_member, total_needed, exercise_difficulty)
             else:
                 # Sort by how many users like each exercise
                 sorted_exercises = sorted(all_exercises.items(), key=lambda x: x[1], reverse=True)
-                selected_ids = [ex_id for ex_id, count in sorted_exercises[:total_needed]]
 
-                # Get exercise details
-                all_selected_exercises = self._get_exercise_details(selected_ids)
+                # Get 2x candidates to have buffer after difficulty filtering
+                candidate_ids = [ex_id for ex_id, _ in sorted_exercises[:total_needed * 2]]
+                candidate_exercises = self._get_exercise_details(candidate_ids)
+
+                # Apply 70/30 difficulty split (same strategy as content-based path)
+                all_selected_exercises = self._filter_by_difficulty_split(
+                    candidate_exercises, exercise_difficulty, total_needed
+                )
+                logger.info(
+                    f"Collaborative path: {len(candidate_exercises)} candidates → "
+                    f"{len(all_selected_exercises)} after difficulty split (target_diff={exercise_difficulty})"
+                )
 
             # Split into primary exercises and alternatives
             exercises = all_selected_exercises[:target_exercises]
@@ -341,6 +382,101 @@ class GroupWorkoutRecommender:
             })
         return exercises
 
+    def _calculate_group_exercise_count(self, median_fitness_level: int, median_sessions: int) -> int:
+        """
+        Calculate group exercise count using progressive overload.
+
+        fitness_level_numeric: 1=beginner, 3=intermediate, 5=advanced
+        Progressive overload ranges:
+          Beginner (1):     0-5 sessions→4, 6-15→5, 16+→6
+          Intermediate (3): 0-5 sessions→6, 6-15→7, 16+→8
+          Advanced (5):     0-5 sessions→8, 6-15→10, 16+→12
+        """
+        if median_fitness_level <= 1:  # Beginner
+            if median_sessions < 6:
+                return 4
+            elif median_sessions < 16:
+                return 5
+            else:
+                return 6
+        elif median_fitness_level <= 3:  # Intermediate
+            if median_sessions < 6:
+                return 6
+            elif median_sessions < 16:
+                return 7
+            else:
+                return 8
+        else:  # Advanced (5)
+            if median_sessions < 6:
+                return 8
+            elif median_sessions < 16:
+                return 10
+            else:
+                return 12
+
+    def _map_fitness_to_exercise_difficulty(self, fitness_level_numeric: int) -> int:
+        """
+        Map fitness_level_numeric (1/3/5) to exercise difficulty (1/2/3).
+
+        fitness_level_numeric: 1=beginner, 3=intermediate, 5=advanced
+        exercise difficulty:   1=beginner, 2=intermediate, 3=advanced
+        """
+        if fitness_level_numeric <= 1:
+            return 1
+        elif fitness_level_numeric <= 3:
+            return 2
+        else:
+            return 3
+
+    def _filter_by_difficulty_split(self, exercises: List[Dict], target_difficulty: int, count: int) -> List[Dict]:
+        """
+        Apply 70/30 difficulty split to a list of exercises with full details.
+
+        - 70% at target_difficulty (core challenge level)
+        - 30% one level below (variety / active recovery)
+        - Falls back to any available exercises if not enough at target levels
+        """
+        import random
+        exact_level = [ex for ex in exercises if ex.get('difficulty_level') == target_difficulty]
+        one_below = (
+            [ex for ex in exercises if ex.get('difficulty_level') == target_difficulty - 1]
+            if target_difficulty > 1 else []
+        )
+        other = [
+            ex for ex in exercises
+            if ex.get('difficulty_level') not in (
+                [target_difficulty] + ([target_difficulty - 1] if target_difficulty > 1 else [])
+            )
+        ]
+
+        selected = []
+        needed_exact = int(count * 0.7)
+
+        if exact_level:
+            random.shuffle(exact_level)
+            selected.extend(exact_level[:needed_exact])
+
+        if one_below and len(selected) < count:
+            random.shuffle(one_below)
+            selected.extend(one_below[:count - len(selected)])
+
+        # Fill remaining from other levels if still short
+        if len(selected) < count and other:
+            random.shuffle(other)
+            selected.extend(other[:count - len(selected)])
+
+        # Last resort: more from exact_level
+        if len(selected) < count and exact_level:
+            extras = [ex for ex in exact_level if ex not in selected]
+            selected.extend(extras[:count - len(selected)])
+
+        logger.info(
+            f"Difficulty split: {len([e for e in selected if e.get('difficulty_level') == target_difficulty])} "
+            f"at level {target_difficulty}, {len([e for e in selected if e.get('difficulty_level') == target_difficulty - 1])} "
+            f"one below, {len(selected)} total"
+        )
+        return selected[:count]
+
     def _map_difficulty_to_numeric(self, difficulty) -> int:
         """
         Map difficulty level to numeric value (1-3).
@@ -390,7 +526,7 @@ class GroupWorkoutRecommender:
         - recommended_exercises: Same as exercises (NEW)
         - alternative_pool: Additional exercises for voting (NEW)
         """
-        primary_exercises = exercises[:8]  # Ensure max 8 exercises
+        primary_exercises = exercises  # Count already determined by progressive overload
 
         result = {
             'workout_format': 'tabata',
