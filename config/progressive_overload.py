@@ -57,3 +57,16 @@ def map_numeric_to_level(fitness_level_numeric: int) -> str:
 def get_exercise_count_from_numeric(fitness_level_numeric: int, session_count: int = 0) -> int:
     """Return exercise count for a numeric fitness level (1/3/5) and session count."""
     return get_exercise_count(map_numeric_to_level(fitness_level_numeric), session_count)
+
+
+def get_session_tier(session_count: int) -> int:
+    """Return the progressive overload tier (1/2/3) for a session count.
+    Tier 1: 0-5 sessions (starter)
+    Tier 2: 6-15 sessions (building)
+    Tier 3: 16+ sessions (established)
+    """
+    if session_count < 6:
+        return 1
+    elif session_count < 16:
+        return 2
+    return 3

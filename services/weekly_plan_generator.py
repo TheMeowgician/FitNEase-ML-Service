@@ -11,7 +11,7 @@ import random
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
-from config.progressive_overload import get_exercise_count
+from config.progressive_overload import get_exercise_count, get_session_tier
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,8 @@ class WeeklyPlanGenerator:
             # Calculate metadata
             metadata = self._calculate_plan_metadata(weekly_plan_data, time_constraints)
             metadata['week_seed'] = week_seed  # Add week seed for variety tracking
+            metadata['session_count'] = session_count
+            metadata['session_tier'] = get_session_tier(session_count)
 
             logger.info(f"[WEEKLY_PLAN] Plan generated: {metadata['total_exercises']} exercises across {len(workout_days)} days (week seed: {week_seed})")
 
