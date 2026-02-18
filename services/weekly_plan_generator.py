@@ -39,7 +39,9 @@ class WeeklyPlanGenerator:
         target_muscle_groups: List[str] = None,
         goals: List[str] = None,
         time_constraints: int = 30,
-        week_seed: Optional[int] = None
+        week_seed: Optional[int] = None,
+        session_count: Optional[int] = None,
+        exercises_per_day: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generate weekly workout plan for a user
@@ -71,9 +73,18 @@ class WeeklyPlanGenerator:
             if not workout_days:
                 raise ValueError("At least one workout day must be specified")
 
-            # Determine exercises per day based on fitness level, time, and session count (progressive overload)
-            session_count = self._get_user_session_count(user_id)
-            exercises_per_day = self._calculate_exercises_per_day(fitness_level, time_constraints, session_count)
+            # Pillar 1: use PHP-provided session_count if given, else query tracking service
+            if session_count is None:
+                session_count = self._get_user_session_count(user_id)
+            else:
+                logger.info(f"[WEEKLY_PLAN] Using PHP-provided session_count: {session_count}")
+
+            # Use PHP-provided exercises_per_day if given, else derive from progressive overload.
+            # PHP override skips the time-constraint cap so tier advancement is always respected.
+            if exercises_per_day is None:
+                exercises_per_day = self._calculate_exercises_per_day(fitness_level, time_constraints, session_count)
+            else:
+                logger.info(f"[WEEKLY_PLAN] Using PHP-provided exercises_per_day: {exercises_per_day}")
 
             # Get exercise recommendations from ML model
             all_exercises = self._get_exercise_recommendations(

@@ -50,9 +50,14 @@ class WeeklyPlanController:
             target_muscle_groups = data.get('target_muscle_groups', [])
             goals = data.get('goals', [])
             time_constraints = data.get('time_constraints', 30)
+            # Pillar 1: PHP may provide authoritative session_count and exercises_per_day
+            session_count = data.get('session_count')       # int or None
+            exercises_per_day = data.get('exercises_per_day')  # int or None
 
             logger.info(f"[WEEKLY_PLAN_CTRL] Generating plan for user {user_id}")
             logger.info(f"[WEEKLY_PLAN_CTRL] Days: {workout_days}, Level: {fitness_level}")
+            if session_count is not None:
+                logger.info(f"[WEEKLY_PLAN_CTRL] PHP-provided session_count={session_count}, exercises_per_day={exercises_per_day}")
 
             # Initialize generator with model manager
             if self.generator is None:
@@ -66,7 +71,9 @@ class WeeklyPlanController:
                 fitness_level=fitness_level,
                 target_muscle_groups=target_muscle_groups,
                 goals=goals,
-                time_constraints=time_constraints
+                time_constraints=time_constraints,
+                session_count=session_count,
+                exercises_per_day=exercises_per_day,
             )
 
             logger.info(f"[WEEKLY_PLAN_CTRL] Plan generated successfully")
