@@ -29,5 +29,5 @@ USER app
 EXPOSE 5000
 
 # Run the application
-# Reduced workers to 2 for stability, increased timeout to 180s
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "180", "--worker-class", "sync", "--max-requests", "1000", "--max-requests-jitter", "100", "app:app"]
+# --preload: master loads app+models once before forking workers (faster startup, shared memory)
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "180", "--worker-class", "sync", "--max-requests", "1000", "--max-requests-jitter", "100", "--preload", "app:app"]
