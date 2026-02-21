@@ -6,6 +6,8 @@ Controller for hybrid recommendation system operations
 """
 
 import logging
+import time
+import threading
 from typing import Dict, List, Optional
 from flask import current_app
 
@@ -15,6 +17,31 @@ from services.content_service import ContentService
 from services.tracking_service import TrackingService
 
 logger = logging.getLogger(__name__)
+
+# In-memory recommendation cache (shared across threads within a worker)
+_recommendation_cache = {}
+_cache_lock = threading.Lock()
+_CACHE_TTL = 300  # 5 minutes
+
+def _get_cached(user_id: int) -> Optional[Dict]:
+    """Get cached recommendation response if still valid"""
+    with _cache_lock:
+        entry = _recommendation_cache.get(user_id)
+        if entry and (time.time() - entry['ts']) < _CACHE_TTL:
+            logger.info(f"Cache HIT for user {user_id}")
+            return entry['data']
+        return None
+
+def _set_cached(user_id: int, data: Dict):
+    """Cache a recommendation response"""
+    with _cache_lock:
+        _recommendation_cache[user_id] = {'data': data, 'ts': time.time()}
+        # Evict old entries if cache grows too large (>500 users)
+        if len(_recommendation_cache) > 500:
+            cutoff = time.time() - _CACHE_TTL
+            expired = [k for k, v in _recommendation_cache.items() if v['ts'] < cutoff]
+            for k in expired:
+                del _recommendation_cache[k]
 
 class HybridController:
     """Controller for hybrid recommendation operations"""
@@ -200,6 +227,11 @@ class HybridController:
         try:
             num_recommendations = data.get('num_recommendations', 10) if data else 10
             auth_token = data.get('auth_token') if data else None
+
+            # Check cache first — skip all HTTP calls + inference if we have a recent result
+            cached = _get_cached(user_id)
+            if cached:
+                return cached
 
             # NEW: Parse customization parameters
             include_alternatives = data.get('include_alternatives', False) if data else False
@@ -394,6 +426,9 @@ class HybridController:
                 response['alternative_count'] = len(alternative_pool) if can_customize else 0
                 logger.info(f"Response includes alternatives: {len(response.get('alternative_pool', []))} exercises")
 
+            # Cache the successful response
+            _set_cached(user_id, response)
+
             return response
 
         except Exception as e:
@@ -572,20 +607,44 @@ class HybridController:
             return {'error': str(e)}, 500
 
     def _save_recommendations(self, user_id: int, recommendations: List[Dict], algorithm: str):
-        """Save recommendations to database"""
+        """Save recommendations to database using batch INSERT"""
         try:
+            if not recommendations:
+                return
+
+            from models.database_models import db
+
+            conn = db.get_connection()
+            if not conn:
+                logger.warning("No DB connection, skipping recommendation save")
+                return
+
+            cursor = conn.cursor()
+            query = """
+            INSERT INTO Recommendations
+            (user_id, workout_id, recommendation_score, algorithm_used,
+             recommendation_reason, recommendation_type, content_based_score,
+             collaborative_score, is_viewed, is_accepted)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            rows = []
             for rec in recommendations:
-                recommendation = Recommendations(
-                    user_id=user_id,
-                    workout_id=rec.get('exercise_id'),
-                    recommendation_score=rec.get('hybrid_score', rec.get('rating', 0.0)),
-                    algorithm_used=algorithm,
-                    recommendation_type=algorithm,
-                    content_based_score=rec.get('content_score', 0.0),
-                    collaborative_score=rec.get('collaborative_score', 0.0),
-                    recommendation_reason=f"Hybrid recommendation combining content-based and collaborative filtering"
-                )
-                recommendation.save()
+                rows.append((
+                    user_id,
+                    rec.get('exercise_id'),
+                    rec.get('hybrid_score', rec.get('rating', 0.0)),
+                    algorithm,
+                    "Hybrid recommendation combining content-based and collaborative filtering",
+                    algorithm,
+                    rec.get('content_score', 0.0),
+                    rec.get('collaborative_score', 0.0),
+                    False,
+                    False
+                ))
+            cursor.executemany(query, rows)
+            conn.commit()
+            cursor.close()
+            conn.close()
 
         except Exception as e:
             logger.warning(f"Failed to save hybrid recommendations: {e}")

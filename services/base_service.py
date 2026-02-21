@@ -20,7 +20,7 @@ class BaseService:
     def __init__(self, service_name: str, base_url: str):
         self.service_name = service_name
         self.base_url = base_url.rstrip('/')
-        self.timeout = 30
+        self.timeout = 10
         self.session = self._create_session()
 
     def _create_session(self) -> requests.Session:
