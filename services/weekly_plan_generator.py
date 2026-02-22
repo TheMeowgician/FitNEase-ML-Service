@@ -159,6 +159,10 @@ class WeeklyPlanGenerator:
           Beginner:     0-5 sessions→4, 6-15→5, 16+→6
           Intermediate: 0-5 sessions→6, 6-15→7, 16+→8
           Advanced:     0-5 sessions→8, 6-15→10, 16+→12
+
+        The onboarding UI promises a specific exercise count per duration
+        (20min=4, 25min=5, 30min=6), so time preference acts as a FLOOR.
+        Progressive overload can increase above it but never reduce below.
         """
         level = (fitness_level or 'beginner').lower()
 
@@ -166,11 +170,11 @@ class WeeklyPlanGenerator:
 
         logger.info(f"[WEEKLY_PLAN] Progressive overload: level={level}, sessions={session_count} → {base_exercises} exercises/day")
 
-        # Adjust for time constraints (4 min per exercise in Tabata)
-        max_exercises_by_time = time_constraints // 4
+        # Time preference floor: inverse Tabata formula (matches PHP)
+        max_by_time = (time_constraints * 60 + 60) // 300
 
-        # Return the minimum to respect both fitness level and time
-        return min(base_exercises, max_exercises_by_time)
+        # Time preference is a floor — user was promised this count in onboarding
+        return max(base_exercises, max_by_time)
 
     def _calculate_dynamic_weights(self, rating_count: int) -> tuple:
         """
