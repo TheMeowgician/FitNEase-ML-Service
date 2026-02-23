@@ -173,8 +173,12 @@ class WeeklyPlanGenerator:
         # Time preference floor: inverse Tabata formula (matches PHP)
         max_by_time = (time_constraints * 60 + 60) // 300
 
-        # Time preference is a floor — user was promised this count in onboarding
-        return max(base_exercises, max_by_time)
+        # Fitness level ceiling: beginner caps at 6, intermediate at 8, advanced at 12.
+        # Without this, a beginner choosing 45min would get 9 exercises — far beyond safe limits.
+        _, level_max = EXERCISE_COUNT_BOUNDS.get(level, (4, 6))
+
+        # Apply time floor BUT cap at fitness level max
+        return min(max(base_exercises, max_by_time), level_max)
 
     def _calculate_dynamic_weights(self, rating_count: int) -> tuple:
         """
