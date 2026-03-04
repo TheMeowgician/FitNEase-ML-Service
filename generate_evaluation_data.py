@@ -227,8 +227,8 @@ def calculate_rating(archetype, exercise):
         elif cal >= 9 or cal <= 2:
             base -= 0.15
 
-    # Gaussian noise (very low for clear patterns)
-    noise = random.gauss(0, 0.08)
+    # Gaussian noise (low for clear patterns)
+    noise = random.gauss(0, 0.12)
     rating = base + noise
     return round(max(1.0, min(5.0, rating)), 2)
 
@@ -466,7 +466,7 @@ def cleanup_previous_eval_data(auth_conn, tracking_conn):
 # ============================================================
 
 def main():
-    random.seed(100)  # reproducible data generation
+    random.seed(200)  # reproducible data generation
     logger.info("=" * 60)
     logger.info("GENERATING HIGH-QUALITY EVALUATION DATA")
     logger.info("=" * 60)
