@@ -112,7 +112,7 @@ ARCHETYPES = {
 }
 
 USERS_PER_ARCHETYPE = 25  # 8 × 25 = 200 users
-RATINGS_PER_USER = (40, 55)
+RATINGS_PER_USER = (50, 70)
 
 
 # ============================================================
@@ -237,22 +237,22 @@ def build_core_exercise_sets(by_muscle, all_exercises):
     """Pre-select shared exercise sets for CF overlap.
 
     Returns:
-        popular: 20 exercises ALL users rate (global popularity)
-        core_by_muscle: {muscle_group: [25 exercises]} — shared within archetype
+        popular: 30 exercises ALL users rate (global popularity)
+        core_by_muscle: {muscle_group: [35 exercises]} — shared within archetype
     """
     rng = random.Random(42)  # deterministic
 
-    # 20 popular exercises from mixed muscle groups (every user rates these)
+    # 30 popular exercises from mixed muscle groups (every user rates these)
     popular = []
     for mg in sorted(by_muscle.keys()):
         pool = by_muscle[mg]
-        popular.extend(rng.sample(pool, min(7, len(pool))))
-    popular = popular[:20]
+        popular.extend(rng.sample(pool, min(10, len(pool))))
+    popular = popular[:30]
 
-    # 25 core exercises per muscle group (shared among archetype users)
+    # 35 core exercises per muscle group (shared among archetype users)
     core_by_muscle = {}
     for mg, exs in by_muscle.items():
-        core_by_muscle[mg] = rng.sample(exs, min(25, len(exs)))
+        core_by_muscle[mg] = rng.sample(exs, min(35, len(exs)))
 
     return popular, core_by_muscle
 
