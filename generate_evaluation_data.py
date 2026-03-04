@@ -175,10 +175,22 @@ def load_exercises(content_conn):
 #  RATING GENERATION
 # ============================================================
 
+# Persistent exercise quality factors (same for all users — gives SVD within-group signal)
+_exercise_quality = {}
+
+def get_exercise_quality(exercise_id):
+    """Get persistent quality factor for an exercise. Deterministic per exercise_id."""
+    if exercise_id not in _exercise_quality:
+        rng = random.Random(exercise_id * 7 + 13)
+        _exercise_quality[exercise_id] = rng.gauss(0, 0.15)  # mild variance
+    return _exercise_quality[exercise_id]
+
+
 def calculate_rating(archetype, exercise):
     """Generate a rating with strong, learnable preference patterns.
 
     With only bodyweight equipment, signals come from muscle group + difficulty.
+    Mild exercise quality factor adds within-group variation for CF to learn.
     """
     base = 3.0
     mg = exercise['target_muscle_group'] or 'core'
@@ -198,6 +210,9 @@ def calculate_rating(archetype, exercise):
         base += 1.0
     else:
         base -= 0.6 * diff_gap
+
+    # Exercise quality factor (mild — helps CF without overwhelming CB signals)
+    base += get_exercise_quality(exercise['exercise_id'])
 
     # Gaussian noise (low for clear patterns)
     noise = random.gauss(0, 0.12)
