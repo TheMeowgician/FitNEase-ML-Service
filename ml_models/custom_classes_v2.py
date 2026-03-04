@@ -82,9 +82,16 @@ class FitNeaseContentBasedRecommender:
             self.exercise_features = self.feature_engineer.transform(exercise_data)
 
             # Apply feature weights before computing similarity
-            # Column order: [target_muscle_group, equipment_needed, exercise_category,
-            #                difficulty_level, default_duration_seconds, calories_burned_per_minute]
-            feature_weights = np.array([0.45, 0.00, 0.10, 0.30, 0.00, 0.15])
+            # Columns depend on which features exist in the data:
+            # 6 cols: [muscle, equipment, category, difficulty, duration, calories]
+            # 5 cols: [muscle, equipment, difficulty, duration, calories] (no category)
+            n_features = self.exercise_features.shape[1]
+            if n_features == 6:
+                feature_weights = np.array([0.45, 0.00, 0.10, 0.30, 0.00, 0.15])
+            elif n_features == 5:
+                feature_weights = np.array([0.45, 0.00, 0.30, 0.00, 0.15])
+            else:
+                feature_weights = np.ones(n_features)
             weighted_features = self.exercise_features * feature_weights
 
             # Calculate similarity matrices using weighted features
