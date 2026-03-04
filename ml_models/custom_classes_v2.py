@@ -81,26 +81,13 @@ class FitNeaseContentBasedRecommender:
             self.feature_engineer.fit(exercise_data)
             self.exercise_features = self.feature_engineer.transform(exercise_data)
 
-            # Apply feature weights before computing similarity
-            # Columns depend on which features exist in the data:
-            # 6 cols: [muscle, equipment, category, difficulty, duration, calories]
-            # 5 cols: [muscle, equipment, difficulty, duration, calories] (no category)
-            n_features = self.exercise_features.shape[1]
-            if n_features == 6:
-                feature_weights = np.array([0.45, 0.00, 0.10, 0.30, 0.00, 0.15])
-            elif n_features == 5:
-                feature_weights = np.array([0.45, 0.00, 0.30, 0.00, 0.15])
-            else:
-                feature_weights = np.ones(n_features)
-            weighted_features = self.exercise_features * feature_weights
-
-            # Calculate similarity matrices using weighted features
+            # Calculate similarity matrices (equal feature weights — proven at 82% CB)
             from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
 
-            self.similarity_matrix = cosine_similarity(weighted_features)
+            self.similarity_matrix = cosine_similarity(self.exercise_features)
             self.similarity_matrices = {
                 'cosine': self.similarity_matrix,
-                'euclidean': 1 / (1 + euclidean_distances(weighted_features))
+                'euclidean': 1 / (1 + euclidean_distances(self.exercise_features))
             }
 
             self.is_fitted = True

@@ -208,24 +208,24 @@ def calculate_rating(archetype, exercise):
     else:
         base -= 0.6 * diff_gap
 
-    # Calorie intensity preference: tertiary signal
+    # Calorie intensity preference: gentle tertiary signal (less noise for CF)
     # high prefers cal >= 7, medium prefers 4-7, low prefers cal <= 4
     cal_pref = archetype.get('calorie_preference', 'medium')
     if cal_pref == 'high':
         if cal >= 7:
-            base += 0.5
+            base += 0.3
         elif cal <= 4:
-            base -= 0.4
+            base -= 0.2
     elif cal_pref == 'low':
         if cal <= 4:
-            base += 0.5
+            base += 0.3
         elif cal >= 7:
-            base -= 0.4
+            base -= 0.2
     else:  # medium
         if 4 <= cal <= 7:
-            base += 0.3
+            base += 0.2
         elif cal >= 9 or cal <= 2:
-            base -= 0.3
+            base -= 0.15
 
     # Gaussian noise (low for clear patterns)
     noise = random.gauss(0, 0.12)
