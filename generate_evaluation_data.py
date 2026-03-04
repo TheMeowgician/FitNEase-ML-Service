@@ -215,17 +215,17 @@ def build_core_exercise_sets(by_muscle, all_exercises):
     """
     rng = random.Random(42)  # deterministic
 
-    # 25 popular exercises from mixed muscle groups (every user rates these)
+    # 15 popular exercises from mixed muscle groups (every user rates these)
     popular = []
     for mg in sorted(by_muscle.keys()):
         pool = by_muscle[mg]
-        popular.extend(rng.sample(pool, min(9, len(pool))))
-    popular = popular[:25]
+        popular.extend(rng.sample(pool, min(5, len(pool))))
+    popular = popular[:15]
 
-    # 30 core exercises per muscle group (shared among archetype users)
+    # 20 core exercises per muscle group (shared among archetype users)
     core_by_muscle = {}
     for mg, exs in by_muscle.items():
-        core_by_muscle[mg] = rng.sample(exs, min(30, len(exs)))
+        core_by_muscle[mg] = rng.sample(exs, min(20, len(exs)))
 
     return popular, core_by_muscle
 
