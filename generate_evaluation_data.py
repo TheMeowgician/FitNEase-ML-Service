@@ -438,7 +438,7 @@ def cleanup_previous_eval_data(auth_conn, tracking_conn):
 # ============================================================
 
 def main():
-    random.seed(42)  # reproducible data generation
+    random.seed(100)  # reproducible data generation
     logger.info("=" * 60)
     logger.info("GENERATING HIGH-QUALITY EVALUATION DATA")
     logger.info("=" * 60)
