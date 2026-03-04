@@ -175,22 +175,10 @@ def load_exercises(content_conn):
 #  RATING GENERATION
 # ============================================================
 
-# Persistent exercise quality factors (same for all users — gives SVD within-group signal)
-_exercise_quality = {}
-
-def get_exercise_quality(exercise_id):
-    """Get persistent quality factor for an exercise. Deterministic per exercise_id."""
-    if exercise_id not in _exercise_quality:
-        rng = random.Random(exercise_id * 7 + 13)  # deterministic seed per exercise
-        _exercise_quality[exercise_id] = rng.gauss(0, 0.35)
-    return _exercise_quality[exercise_id]
-
-
 def calculate_rating(archetype, exercise):
     """Generate a rating with strong, learnable preference patterns.
 
     With only bodyweight equipment, signals come from muscle group + difficulty.
-    Exercise quality factor adds within-group variation for CF to learn.
     """
     base = 3.0
     mg = exercise['target_muscle_group'] or 'core'
@@ -211,9 +199,6 @@ def calculate_rating(archetype, exercise):
     else:
         base -= 0.6 * diff_gap
 
-    # Exercise quality factor (persistent, same for all users — learnable by SVD)
-    base += get_exercise_quality(exercise['exercise_id'])
-
     # Gaussian noise (low for clear patterns)
     noise = random.gauss(0, 0.12)
     rating = base + noise
@@ -224,22 +209,22 @@ def build_core_exercise_sets(by_muscle, all_exercises):
     """Pre-select shared exercise sets for CF overlap.
 
     Returns:
-        popular: 15 exercises ALL users rate (global popularity)
-        core_by_muscle: {muscle_group: [20 exercises]} — shared within archetype
+        popular: 20 exercises ALL users rate (global popularity)
+        core_by_muscle: {muscle_group: [25 exercises]} — shared within archetype
     """
     rng = random.Random(42)  # deterministic
 
-    # 15 popular exercises from mixed muscle groups (every user rates these)
+    # 20 popular exercises from mixed muscle groups (every user rates these)
     popular = []
     for mg in sorted(by_muscle.keys()):
         pool = by_muscle[mg]
-        popular.extend(rng.sample(pool, min(5, len(pool))))
-    popular = popular[:15]
+        popular.extend(rng.sample(pool, min(7, len(pool))))
+    popular = popular[:20]
 
-    # 20 core exercises per muscle group (shared among archetype users)
+    # 25 core exercises per muscle group (shared among archetype users)
     core_by_muscle = {}
     for mg, exs in by_muscle.items():
-        core_by_muscle[mg] = rng.sample(exs, min(20, len(exs)))
+        core_by_muscle[mg] = rng.sample(exs, min(25, len(exs)))
 
     return popular, core_by_muscle
 
