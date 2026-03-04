@@ -298,8 +298,12 @@ def evaluate_content_based(ratings_df, exercises_df):
         if len(user_ratings) < 5:
             continue
 
-        test_item = user_ratings.iloc[-1]
-        train_items = user_ratings.iloc[:-1]
+        # Hold out last POSITIVE rating (standard RecSys practice, He et al. 2017)
+        positive_ratings = user_ratings[user_ratings['rating'] >= 4.0]
+        if len(positive_ratings) == 0:
+            continue
+        test_item = positive_ratings.iloc[-1]
+        train_items = user_ratings[user_ratings.index != test_item.name]
         test_eid = int(test_item['exercise_id'])
 
         if test_eid not in model_exercise_ids:
@@ -388,12 +392,18 @@ def evaluate_collaborative(ratings_df):
     if not eligible_users:
         return None
 
+    # Hold out last POSITIVE rating per user (standard RecSys practice)
     train_rows = []
     test_rows = []
     for uid in eligible_users:
         ur = ratings_df[ratings_df['user_id'] == uid].sort_values('timestamp')
-        test_rows.append(ur.iloc[-1])
-        train_rows.append(ur.iloc[:-1])
+        positive = ur[ur['rating'] >= 4.0]
+        if len(positive) == 0:
+            train_rows.append(ur)
+            continue
+        test_item = positive.iloc[-1]
+        test_rows.append(test_item)
+        train_rows.append(ur[ur.index != test_item.name])
 
     ineligible = ratings_df[~ratings_df['user_id'].isin(eligible_users)]
     train_df = pd.concat(train_rows + [ineligible], ignore_index=True)
@@ -485,11 +495,17 @@ def evaluate_hybrid(ratings_df, exercises_df):
     if not eligible_users:
         return None
 
+    # Hold out last POSITIVE rating per user (standard RecSys practice)
     train_rows = []; test_rows = []
     for uid in eligible_users:
         ur = ratings_df[ratings_df['user_id'] == uid].sort_values('timestamp')
-        test_rows.append(ur.iloc[-1])
-        train_rows.append(ur.iloc[:-1])
+        positive = ur[ur['rating'] >= 4.0]
+        if len(positive) == 0:
+            train_rows.append(ur)
+            continue
+        test_item = positive.iloc[-1]
+        test_rows.append(test_item)
+        train_rows.append(ur[ur.index != test_item.name])
 
     ineligible = ratings_df[~ratings_df['user_id'].isin(eligible_users)]
     train_df = pd.concat(train_rows + [ineligible], ignore_index=True)

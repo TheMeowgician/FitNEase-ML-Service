@@ -103,7 +103,7 @@ ARCHETYPES = {
     },
 }
 
-USERS_PER_ARCHETYPE = 20  # 8 × 20 = 160 users
+USERS_PER_ARCHETYPE = 25  # 8 × 25 = 200 users
 RATINGS_PER_USER = (40, 55)
 
 
@@ -185,23 +185,23 @@ def calculate_rating(archetype, exercise):
     mg = exercise['target_muscle_group'] or 'core'
     diff = exercise['difficulty_level'] or 2
 
-    # Muscle group preference: strongest signal (+1.5 / +0.4 / -1.2)
+    # Muscle group preference: strongest signal (+1.8 / +0.4 / -1.5)
     if mg in archetype['preferred_muscles']:
-        base += 1.5
+        base += 1.8
     elif mg in archetype['secondary_muscles']:
         base += 0.4
     elif mg in archetype.get('disliked_muscles', []):
-        base -= 1.2
+        base -= 1.5
 
-    # Difficulty match: strong secondary signal (+0.7 / -0.5 per level gap)
+    # Difficulty match: strong secondary signal (+0.8 / -0.5 per level gap)
     diff_gap = abs(diff - archetype['preferred_difficulty'])
     if diff_gap == 0:
-        base += 0.7
+        base += 0.8
     else:
         base -= 0.5 * diff_gap
 
-    # Gaussian noise (low to keep signal very clear)
-    noise = random.gauss(0, 0.2)
+    # Gaussian noise (minimal to keep signal very clear)
+    noise = random.gauss(0, 0.15)
     rating = base + noise
     return round(max(1.0, min(5.0, rating)), 2)
 
