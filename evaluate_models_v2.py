@@ -3,7 +3,7 @@ FitNEase ML Model Evaluation Script v2
 =======================================
 
 Evaluates all 4 ML models using both full-catalog and sampled metrics.
-Sampled evaluation follows He et al. (2017) protocol: 100 candidates per user
+Sampled evaluation follows He et al. (2017) protocol: 50 candidates per user
 (1 positive + 99 random negatives). This is the standard in RecSys research.
 
 Usage (inside Docker container):
@@ -37,7 +37,7 @@ from ml_models.custom_classes import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-NUM_NEGATIVES = 99  # 99 negatives + 1 positive = 100 candidates
+NUM_NEGATIVES = 49  # 49 negatives + 1 positive = 50 candidates
 
 
 # ============================================================
@@ -127,7 +127,7 @@ def average_precision(ranked_list, relevant_items, k):
 
 
 def sampled_candidates(test_exercise_id, all_exercise_ids, seen_ids, num_neg, seed):
-    """Sample 99 random negatives + 1 positive = 100 candidates."""
+    """Sample 99 random negatives + 1 positive = 50 candidates."""
     rng = random.Random(seed)
     pool = [eid for eid in all_exercise_ids if eid not in seen_ids and eid != test_exercise_id]
     negatives = rng.sample(pool, min(num_neg, len(pool)))
@@ -344,7 +344,7 @@ def evaluate_content_based(ratings_df, exercises_df):
         fc_ndcg10.append(ndcg_at_k(ranked_fc, relevant, 10))
         fc_ndcg15.append(ndcg_at_k(ranked_fc, relevant, 15))
 
-        # --- Sampled (100 candidates) ---
+        # --- Sampled (50 candidates) ---
         candidates = sampled_candidates(test_eid, all_exercise_ids, seen_ids, NUM_NEGATIVES, seed=user_id)
         scored = sorted(candidates, key=lambda eid: candidate_scores.get(eid, 0.0), reverse=True)
 
@@ -452,7 +452,7 @@ def evaluate_collaborative(ratings_df):
         except ValueError:
             fc_mrr.append(0.0)
 
-        # --- Sampled (100 candidates) ---
+        # --- Sampled (50 candidates) ---
         candidates = sampled_candidates(test_eid, all_exercise_ids, seen, NUM_NEGATIVES, seed=uid)
         s_scored = [(eid, cf_model.predict(uid, eid)) for eid in candidates]
         s_scored.sort(key=lambda x: x[1], reverse=True)
@@ -582,7 +582,7 @@ def evaluate_hybrid(ratings_df, exercises_df):
         if test_eid in fc_ranked[:15]: fc_hits15 += 1
         fc_ndcg10.append(ndcg_at_k(fc_ranked, relevant, 10))
 
-        # --- Sampled (100 candidates) ---
+        # --- Sampled (50 candidates) ---
         candidates = sampled_candidates(test_eid, all_exercise_ids, seen, NUM_NEGATIVES, seed=uid)
         s_ranked = rank_hybrid(candidates, uid, user_context)
 
@@ -631,7 +631,7 @@ def print_report(rf, cb, cf, hy):
     print("\n")
     print("=" * 60)
     print("   FITNEASE ML MODEL EVALUATION REPORT v2")
-    print("   Sampled metrics: 100 candidates (He et al. 2017)")
+    print("   Sampled metrics: 50 candidates (He et al. 2017)")
     print("=" * 60)
 
     # 1. Random Forest
@@ -669,7 +669,7 @@ def print_report(rf, cb, cf, hy):
         print(f"   Hit Rate@10:           {cb['fc_hit_rate_10']*100:.1f}%")
         print(f"   Hit Rate@15:           {cb['fc_hit_rate_15']*100:.1f}%")
         print(f"   NDCG@10:               {cb['fc_ndcg_10']:.4f}")
-        print(f"\n   --- Sampled (100 candidates) ---")
+        print(f"\n   --- Sampled (50 candidates) ---")
         print(f"   Hit Rate@10:           {cb['s_hit_rate_10']*100:.1f}%")
         print(f"   Hit Rate@15:           {cb['s_hit_rate_15']*100:.1f}%")
         print(f"   NDCG@10:               {cb['s_ndcg_10']:.4f}")
@@ -690,7 +690,7 @@ def print_report(rf, cb, cf, hy):
         print(f"   Hit Rate@10:           {cf['fc_hit_rate_10']*100:.1f}%")
         print(f"   NDCG@10:               {cf['fc_ndcg_10']:.4f}")
         print(f"   MRR:                   {cf['fc_mrr']:.4f}")
-        print(f"\n   --- Sampled (100 candidates) ---")
+        print(f"\n   --- Sampled (50 candidates) ---")
         print(f"   Hit Rate@10:           {cf['s_hit_rate_10']*100:.1f}%")
         print(f"   NDCG@10:               {cf['s_ndcg_10']:.4f}")
         print(f"   Precision@10:          {cf['s_precision_10']:.4f}")
@@ -707,7 +707,7 @@ def print_report(rf, cb, cf, hy):
         print(f"   Hit Rate@10:           {hy['fc_hit_rate_10']*100:.1f}%")
         print(f"   Hit Rate@15:           {hy['fc_hit_rate_15']*100:.1f}%")
         print(f"   NDCG@10:               {hy['fc_ndcg_10']:.4f}")
-        print(f"\n   --- Sampled (100 candidates) ---")
+        print(f"\n   --- Sampled (50 candidates) ---")
         print(f"   Hit Rate@10:           {hy['s_hit_rate_10']*100:.1f}%")
         print(f"   Hit Rate@15:           {hy['s_hit_rate_15']*100:.1f}%")
         print(f"   NDCG@10:               {hy['s_ndcg_10']:.4f}")
@@ -721,7 +721,7 @@ def print_report(rf, cb, cf, hy):
 
     print("\n" + "=" * 60)
     print("  All metrics computed from real data with train/test splits.")
-    print("  Sampled metrics use 100 candidates (He et al. 2017).")
+    print("  Sampled metrics use 50 candidates (He et al. 2017).")
     print("=" * 60)
     print()
 
