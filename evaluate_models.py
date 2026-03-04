@@ -121,20 +121,15 @@ def load_data(tracking_conn, content_conn, auth_conn):
     # --- User profiles ---
     users_df = pd.read_sql("""
         SELECT
-            id AS user_id,
+            user_id,
             age,
             fitness_level,
-            height,
-            weight
+            workout_experience_years
         FROM users
         WHERE age IS NOT NULL
     """, auth_conn)
-    # Compute BMI where possible
-    users_df['bmi'] = np.where(
-        (users_df['height'] > 0) & (users_df['weight'] > 0),
-        users_df['weight'] / ((users_df['height'] / 100) ** 2),
-        23.0,
-    )
+    # No height/weight columns — use default BMI
+    users_df['bmi'] = 23.0
     logger.info(f"Loaded {len(users_df)} user profiles")
 
     return ratings_df, exercises_df, users_df
