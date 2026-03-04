@@ -1,0 +1,1371 @@
+"""
+Custom ML Classes for FitNEase Models
+===================================
+
+Custom classes required by the pickled ML models
+"""
+
+import numpy as np
+import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.ensemble import RandomForestClassifier
+import joblib
+from typing import Dict, List, Optional, Any, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    from surprise import Dataset, Reader, SVD, accuracy
+    from surprise.model_selection import train_test_split
+    SURPRISE_AVAILABLE = True
+except ImportError:
+    SURPRISE_AVAILABLE = False
+    logger.warning("Surprise library not available, collaborative filtering will use fallback")
+
+class ProperCFConfig:
+    """Configuration class for Collaborative Filtering"""
+
+    def __init__(self):
+        self.algorithm = 'SVD'
+        self.n_factors = 50
+        self.lr_all = 0.005
+        self.reg_all = 0.02
+        self.min_rating = 1.0
+        self.max_rating = 5.0
+        self.verbose = False
+
+class ContentBasedConfig:
+    """Configuration class for Content-Based Filtering"""
+
+    def __init__(self):
+        self.similarity_metric = 'cosine'
+        self.min_similarity = 0.1
+        self.max_recommendations = 50
+        self.feature_weights = {
+            'difficulty_level': 0.3,
+            'target_muscle_group': 0.4,
+            'equipment_needed': 0.3
+        }
+        self.normalization = True
+        self.use_tfidf = True
+
+class FitNeaseContentBasedRecommender:
+    """FitNEase Content-Based Recommender (original class name for pickle compatibility)"""
+
+    def __init__(self, config=None):
+        self.config = config or ContentBasedConfig()
+        self.feature_engineer = FitNeaseFeatureEngineer()
+        self.similarity_matrix = None
+        self.similarity_matrices = {}
+        self.exercise_features = None
+        self.exercise_ids = None
+        self.exercise_data = None
+        self.is_fitted = False
+
+    def fit(self, exercise_data):
+        """Fit the content-based model"""
+        try:
+            if isinstance(exercise_data, list):
+                exercise_data = pd.DataFrame(exercise_data)
+
+            self.exercise_data = exercise_data.copy()
+
+            # Store exercise IDs
+            self.exercise_ids = exercise_data.get('id', range(len(exercise_data))).tolist()
+
+            # Engineer features
+            self.feature_engineer.fit(exercise_data)
+            self.exercise_features = self.feature_engineer.transform(exercise_data)
+
+            # Apply feature weights before computing similarity
+            # Column order: [target_muscle_group, equipment_needed, exercise_category,
+            #                difficulty_level, default_duration_seconds, calories_burned_per_minute]
+            feature_weights = np.array([0.45, 0.00, 0.10, 0.30, 0.00, 0.15])
+            weighted_features = self.exercise_features * feature_weights
+
+            # Calculate similarity matrices using weighted features
+            from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
+
+            self.similarity_matrix = cosine_similarity(weighted_features)
+            self.similarity_matrices = {
+                'cosine': self.similarity_matrix,
+                'euclidean': 1 / (1 + euclidean_distances(weighted_features))
+            }
+
+            self.is_fitted = True
+            logger.info("FitNEase content-based recommender fitted successfully")
+            return self
+
+        except Exception as e:
+            logger.error(f"Error fitting FitNEase content-based model: {e}")
+            # Create dummy similarity matrix
+            n_exercises = len(exercise_data) if hasattr(exercise_data, '__len__') else 100
+            self.similarity_matrix = np.eye(n_exercises) * 0.5
+            self.similarity_matrices = {'cosine': self.similarity_matrix}
+            self.exercise_ids = list(range(n_exercises))
+            self.is_fitted = True
+            return self
+
+    def get_recommendations(self, exercise_name=None, exercise_id=None, user_profile=None,
+                          num_recommendations=10, similarity_metric='cosine'):
+        """Get content-based recommendations"""
+        try:
+            # Check if model is fitted (either is_fitted attribute or has similarity_matrices)
+            if not (hasattr(self, 'is_fitted') and self.is_fitted) and not self.similarity_matrices:
+                return self._get_fallback_recommendations(num_recommendations)
+
+            recommendations = []
+            similarity_matrix = self.similarity_matrices.get(similarity_metric, self.similarity_matrix)
+
+            if similarity_matrix is None:
+                return self._get_fallback_recommendations(num_recommendations)
+
+            target_idx = None
+
+            # Find target exercise index
+            if exercise_id and exercise_id in self.exercise_ids:
+                target_idx = self.exercise_ids.index(exercise_id)
+            elif exercise_name and self.exercise_data is not None:
+                # Search by name
+                name_matches = self.exercise_data[self.exercise_data['name'].str.contains(exercise_name, case=False, na=False)]
+                if not name_matches.empty:
+                    target_idx = name_matches.index[0]
+
+            if target_idx is not None:
+                # Get similar exercises
+                similarity_scores = similarity_matrix[target_idx]
+                similar_indices = similarity_scores.argsort()[-num_recommendations-1:-1][::-1]
+
+                for i, sim_idx in enumerate(similar_indices):
+                    if sim_idx != target_idx:  # Don't recommend the same exercise
+                        exercise_info = self.exercise_data.iloc[sim_idx] if self.exercise_data is not None else {}
+                        recommendations.append({
+                            'exercise_id': self.exercise_ids[sim_idx],
+                            'exercise_name': exercise_info.get('name', f'Exercise_{sim_idx}'),
+                            'similarity_score': float(similarity_scores[sim_idx]),
+                            'target_muscle_group': exercise_info.get('target_muscle_group', 'unknown'),
+                            'difficulty_level': exercise_info.get('difficulty_level', 2),
+                            'equipment_needed': exercise_info.get('equipment_needed', 'unknown'),
+                            'calories_burned_per_minute': exercise_info.get('calories_burned_per_minute', 5),
+                            'default_duration_seconds': exercise_info.get('default_duration_seconds', 1800),
+                            'rank': i + 1,
+                            'reason': 'Content similarity'
+                        })
+            else:
+                # Recommend popular/default exercises
+                recommendations = self._get_fallback_recommendations(num_recommendations)
+
+            return recommendations[:num_recommendations]
+
+        except Exception as e:
+            logger.error(f"Error generating FitNEase content recommendations: {e}")
+            return self._get_fallback_recommendations(num_recommendations)
+
+    def get_user_based_recommendations(self, user_preferences=None, num_recommendations=10):
+        """Get user-based recommendations"""
+        try:
+            if not self.is_fitted or self.exercise_data is None:
+                return self._get_fallback_recommendations(num_recommendations)
+
+            # Filter exercises based on user preferences
+            filtered_exercises = self.exercise_data.copy()
+
+            if user_preferences:
+                # Apply preference filters
+                if 'target_muscle_group' in user_preferences:
+                    preferred_muscle = user_preferences['target_muscle_group']
+                    filtered_exercises = filtered_exercises[
+                        filtered_exercises['target_muscle_group'] == preferred_muscle
+                    ]
+
+                if 'difficulty_level' in user_preferences:
+                    preferred_difficulty = user_preferences['difficulty_level']
+                    filtered_exercises = filtered_exercises[
+                        abs(filtered_exercises['difficulty_level'] - preferred_difficulty) <= 1
+                    ]
+
+            # Get top exercises from filtered set
+            recommendations = []
+            for i, (idx, exercise) in enumerate(filtered_exercises.head(num_recommendations).iterrows()):
+                recommendations.append({
+                    'exercise_id': exercise.get('id', idx),
+                    'exercise_name': exercise.get('name', f'Exercise_{idx}'),
+                    'preference_score': 0.8 - (i * 0.05),
+                    'target_muscle_group': exercise.get('target_muscle_group', 'unknown'),
+                    'difficulty_level': exercise.get('difficulty_level', 2),
+                    'equipment_needed': exercise.get('equipment_needed', 'unknown'),
+                    'calories_burned_per_minute': exercise.get('calories_burned_per_minute', 5),
+                    'default_duration_seconds': exercise.get('default_duration_seconds', 1800),
+                    'rank': i + 1,
+                    'reason': 'User preference match'
+                })
+
+            return recommendations
+
+        except Exception as e:
+            logger.error(f"Error generating user-based recommendations: {e}")
+            return self._get_fallback_recommendations(num_recommendations)
+
+    def find_exercise_index(self, exercise_name):
+        """Find exercise index by name"""
+        try:
+            if self.exercise_data is not None:
+                name_matches = self.exercise_data[self.exercise_data['name'].str.contains(exercise_name, case=False, na=False)]
+                if not name_matches.empty:
+                    return name_matches.index[0]
+            return None
+        except Exception:
+            return None
+
+    def _get_fallback_recommendations(self, num_recommendations):
+        """Fallback recommendations when model fails"""
+        return [
+            {
+                'exercise_id': 100 + i,
+                'exercise_name': f'Recommended Exercise {i+1}',
+                'similarity_score': 0.8 - (i * 0.05),
+                'target_muscle_group': 'core',
+                'difficulty_level': 2,
+                'equipment_needed': 'bodyweight',
+                'calories_burned_per_minute': 5,
+                'default_duration_seconds': 1800,
+                'rank': i + 1,
+                'reason': 'Default recommendation'
+            }
+            for i in range(num_recommendations)
+        ]
+
+class ContentBasedRecommenderModel:
+    """Complete Content-Based Recommender Model"""
+
+    def __init__(self, config=None):
+        self.config = config or ContentBasedConfig()
+        self.feature_engineer = FitNeaseFeatureEngineer()
+        self.similarity_matrix = None
+        self.exercise_features = None
+        self.exercise_ids = None
+        self.is_fitted = False
+
+    def fit(self, exercise_data):
+        """Fit the content-based model"""
+        try:
+            if isinstance(exercise_data, list):
+                exercise_data = pd.DataFrame(exercise_data)
+
+            # Store exercise IDs
+            self.exercise_ids = exercise_data.get('id', range(len(exercise_data))).tolist()
+
+            # Engineer features
+            self.feature_engineer.fit(exercise_data)
+            self.exercise_features = self.feature_engineer.transform(exercise_data)
+
+            # Calculate similarity matrix
+            self.similarity_matrix = cosine_similarity(self.exercise_features)
+
+            self.is_fitted = True
+            logger.info("Content-based recommender fitted successfully")
+            return self
+
+        except Exception as e:
+            logger.error(f"Error fitting content-based model: {e}")
+            # Create dummy similarity matrix
+            n_exercises = len(exercise_data) if hasattr(exercise_data, '__len__') else 100
+            self.similarity_matrix = np.eye(n_exercises) * 0.5
+            self.exercise_ids = list(range(n_exercises))
+            self.is_fitted = True
+            return self
+
+    def get_recommendations(self, exercise_id=None, user_profile=None, n_recommendations=10):
+        """Get content-based recommendations"""
+        try:
+            if not self.is_fitted:
+                return self._get_fallback_recommendations(n_recommendations)
+
+            recommendations = []
+
+            if exercise_id and exercise_id in self.exercise_ids:
+                # Get similar exercises
+                idx = self.exercise_ids.index(exercise_id)
+                similarity_scores = self.similarity_matrix[idx]
+
+                # Get top similar exercises
+                similar_indices = similarity_scores.argsort()[-n_recommendations-1:-1][::-1]
+
+                for i, sim_idx in enumerate(similar_indices):
+                    if sim_idx != idx:  # Don't recommend the same exercise
+                        recommendations.append({
+                            'exercise_id': self.exercise_ids[sim_idx],
+                            'similarity_score': float(similarity_scores[sim_idx]),
+                            'rank': i + 1,
+                            'reason': 'Content similarity'
+                        })
+
+            else:
+                # Recommend popular/default exercises
+                recommendations = self._get_fallback_recommendations(n_recommendations)
+
+            return recommendations[:n_recommendations]
+
+        except Exception as e:
+            logger.error(f"Error generating content recommendations: {e}")
+            return self._get_fallback_recommendations(n_recommendations)
+
+    def _get_fallback_recommendations(self, n_recommendations):
+        """Fallback recommendations when model fails"""
+        return [
+            {
+                'exercise_id': 100 + i,
+                'similarity_score': 0.8 - (i * 0.05),
+                'rank': i + 1,
+                'reason': 'Default recommendation'
+            }
+            for i in range(n_recommendations)
+        ]
+
+class HybridRecommenderModel:
+    """Complete Hybrid Recommender Model"""
+
+    def __init__(self, content_weight=0.6, collaborative_weight=0.4):
+        self.content_weight = content_weight
+        self.collaborative_weight = collaborative_weight
+        self.content_model = None
+        self.collaborative_model = None
+        self.is_fitted = False
+
+    def fit(self, content_data=None, collaborative_data=None):
+        """Fit the hybrid model"""
+        try:
+            # Initialize content-based component
+            self.content_model = ContentBasedRecommenderModel()
+            if content_data is not None:
+                self.content_model.fit(content_data)
+
+            # Initialize collaborative component
+            self.collaborative_model = ProperCollaborativeFiltering()
+            if collaborative_data is not None:
+                self.collaborative_model.fit(ratings_data=collaborative_data)
+            else:
+                self.collaborative_model.fit()
+
+            self.is_fitted = True
+            logger.info("Hybrid recommender fitted successfully")
+            return self
+
+        except Exception as e:
+            logger.error(f"Error fitting hybrid model: {e}")
+            # Initialize with defaults
+            self.content_model = ContentBasedRecommenderModel()
+            self.content_model.is_fitted = True
+            self.collaborative_model = ProperCollaborativeFiltering()
+            self.collaborative_model.fit()
+            self.is_fitted = True
+            return self
+
+    def get_recommendations(self, user_id, n_recommendations=10, user_profile=None):
+        """Get hybrid recommendations"""
+        try:
+            if not self.is_fitted:
+                return self._get_fallback_recommendations(user_id, n_recommendations)
+
+            # Get content-based recommendations
+            content_recs = []
+            if self.content_model and self.content_model.is_fitted:
+                content_recs = self.content_model.get_recommendations(
+                    user_profile=user_profile,
+                    n_recommendations=n_recommendations * 2
+                )
+
+            # Get collaborative recommendations
+            collab_recs = []
+            if self.collaborative_model:
+                collab_recs = self.collaborative_model.recommend(
+                    user_id,
+                    n_recommendations=n_recommendations * 2
+                )
+
+            # Combine recommendations
+            hybrid_scores = {}
+
+            # Add content-based scores
+            for rec in content_recs:
+                exercise_id = rec.get('exercise_id')
+                score = rec.get('similarity_score', 0.5)
+                hybrid_scores[exercise_id] = self.content_weight * score
+
+            # Add collaborative scores
+            for rec in collab_recs:
+                exercise_id = rec.get('item_id') or rec.get('exercise_id')
+                score = rec.get('predicted_rating', 3.5) / 5.0  # Normalize to 0-1
+                if exercise_id in hybrid_scores:
+                    hybrid_scores[exercise_id] += self.collaborative_weight * score
+                else:
+                    hybrid_scores[exercise_id] = self.collaborative_weight * score
+
+            # Convert to recommendations list
+            recommendations = []
+            for exercise_id, score in sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True):
+                recommendations.append({
+                    'exercise_id': exercise_id,
+                    'hybrid_score': score,
+                    'content_weight': self.content_weight,
+                    'collaborative_weight': self.collaborative_weight,
+                    'recommendation_type': 'hybrid'
+                })
+
+            return recommendations[:n_recommendations]
+
+        except Exception as e:
+            logger.error(f"Error generating hybrid recommendations: {e}")
+            return self._get_fallback_recommendations(user_id, n_recommendations)
+
+    def _get_fallback_recommendations(self, user_id, n_recommendations):
+        """Fallback recommendations"""
+        return [
+            {
+                'exercise_id': 100 + i + (user_id % 10),
+                'hybrid_score': 0.8 - (i * 0.05),
+                'content_weight': self.content_weight,
+                'collaborative_weight': self.collaborative_weight,
+                'recommendation_type': 'hybrid_fallback'
+            }
+            for i in range(n_recommendations)
+        ]
+
+class FitNeaseFeatureEngineer(BaseEstimator, TransformerMixin):
+    """Custom feature engineering class for content-based recommendations"""
+
+    def __init__(self, target_columns=None):
+        self.target_columns = target_columns or [
+            'difficulty_level', 'default_duration_seconds', 'calories_burned_per_minute',
+            'target_muscle_group', 'equipment_needed', 'exercise_category'
+        ]
+        self.scalers = {}
+        self.encoders = {}
+        self.vectorizers = {}
+        self.feature_names_ = []
+
+    def fit(self, X, y=None):
+        """Fit the feature engineering pipeline"""
+        if isinstance(X, dict):
+            X = pd.DataFrame([X])
+        elif not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        # Fit encoders for categorical columns
+        categorical_cols = ['target_muscle_group', 'equipment_needed', 'exercise_category']
+        for col in categorical_cols:
+            if col in X.columns:
+                self.encoders[col] = LabelEncoder()
+                # Handle missing values
+                X[col] = X[col].fillna('unknown')
+                self.encoders[col].fit(X[col].astype(str))
+
+        # Fit scalers for numerical columns
+        numerical_cols = ['difficulty_level', 'default_duration_seconds', 'calories_burned_per_minute']
+        for col in numerical_cols:
+            if col in X.columns:
+                self.scalers[col] = StandardScaler()
+                # Handle missing values
+                X[col] = X[col].fillna(X[col].median())
+                self.scalers[col].fit(X[col].values.reshape(-1, 1))
+
+        return self
+
+    def transform(self, X):
+        """Transform the features"""
+        if isinstance(X, dict):
+            X = pd.DataFrame([X])
+        elif not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        X = X.copy()
+        transformed_features = []
+
+        # Transform categorical columns
+        categorical_cols = ['target_muscle_group', 'equipment_needed', 'exercise_category']
+        for col in categorical_cols:
+            if col in X.columns and col in self.encoders:
+                # Handle missing values and unknown categories
+                X[col] = X[col].fillna('unknown')
+                # Handle unseen categories
+                X[col] = X[col].apply(lambda x: x if x in self.encoders[col].classes_ else 'unknown')
+                if 'unknown' not in self.encoders[col].classes_:
+                    # Add unknown category if not present
+                    self.encoders[col].classes_ = np.append(self.encoders[col].classes_, 'unknown')
+
+                encoded = self.encoders[col].transform(X[col].astype(str))
+                transformed_features.append(encoded)
+
+        # Transform numerical columns
+        numerical_cols = ['difficulty_level', 'default_duration_seconds', 'calories_burned_per_minute']
+        for col in numerical_cols:
+            if col in X.columns and col in self.scalers:
+                # Handle missing values
+                X[col] = X[col].fillna(0)
+                scaled = self.scalers[col].transform(X[col].values.reshape(-1, 1)).flatten()
+                transformed_features.append(scaled)
+
+        # Combine all features
+        if transformed_features:
+            return np.column_stack(transformed_features)
+        else:
+            return np.array([[0]])
+
+    def get_feature_names_out(self, input_features=None):
+        """Get output feature names"""
+        feature_names = []
+
+        categorical_cols = ['target_muscle_group', 'equipment_needed', 'exercise_category']
+        for col in categorical_cols:
+            if col in self.encoders:
+                feature_names.append(f'{col}_encoded')
+
+        numerical_cols = ['difficulty_level', 'default_duration_seconds', 'calories_burned_per_minute']
+        for col in numerical_cols:
+            if col in self.scalers:
+                feature_names.append(f'{col}_scaled')
+
+        return feature_names
+
+class ProperCollaborativeFiltering:
+    """Custom collaborative filtering class"""
+
+    def __init__(self, algorithm='SVD', n_factors=50, lr_all=0.005, reg_all=0.02):
+        self.algorithm = algorithm
+        self.n_factors = n_factors
+        self.lr_all = lr_all
+        self.reg_all = reg_all
+        self.model = None
+        self.reader = None
+        self.trainset = None
+        self.user_mean = {}
+        self.item_mean = {}
+        self.global_mean = 0
+
+    def fit(self, user_item_matrix=None, ratings_data=None):
+        """Fit the collaborative filtering model"""
+        try:
+            if not SURPRISE_AVAILABLE:
+                logger.warning("Surprise library not available, using fallback collaborative filtering")
+                self._create_fallback_model(ratings_data)
+                return
+
+            if ratings_data is not None:
+                # Use ratings data format
+                if isinstance(ratings_data, pd.DataFrame):
+                    df = ratings_data.copy()
+                else:
+                    df = pd.DataFrame(ratings_data)
+
+                # Ensure required columns
+                if 'user_id' not in df.columns or 'item_id' not in df.columns or 'rating' not in df.columns:
+                    # Create dummy data if format is wrong
+                    df = pd.DataFrame({
+                        'user_id': [1, 2, 3, 4, 5],
+                        'item_id': [101, 102, 103, 104, 105],
+                        'rating': [4.0, 3.5, 5.0, 2.5, 4.5]
+                    })
+
+            else:
+                # Create dummy data
+                df = pd.DataFrame({
+                    'user_id': [1, 2, 3, 4, 5],
+                    'item_id': [101, 102, 103, 104, 105],
+                    'rating': [4.0, 3.5, 5.0, 2.5, 4.5]
+                })
+
+            # Create Surprise dataset
+            self.reader = Reader(rating_scale=(1, 5))
+            data = Dataset.load_from_df(df[['user_id', 'item_id', 'rating']], self.reader)
+            self.trainset = data.build_full_trainset()
+
+            # Initialize and train model
+            self.model = SVD(
+                n_factors=self.n_factors,
+                lr_all=self.lr_all,
+                reg_all=self.reg_all
+            )
+            self.model.fit(self.trainset)
+
+            # Calculate means for fallback
+            self.global_mean = self.trainset.global_mean
+
+            logger.info("Collaborative filtering model trained successfully")
+            return self
+
+        except Exception as e:
+            logger.error(f"Error training collaborative filtering model: {e}")
+            # Initialize with defaults
+            self.global_mean = 3.5
+            return self
+
+    def predict(self, user_id, item_id):
+        """Predict rating for user-item pair using similarity matrices or Surprise model"""
+        try:
+            # Method 1: Use Surprise model if available (use getattr to avoid AttributeError)
+            model = getattr(self, 'model', None)
+            trainset = getattr(self, 'trainset', None)
+            if model is not None and trainset is not None:
+                prediction = model.predict(user_id, item_id)
+                return prediction.est
+
+            # Method 2: Use similarity matrices (from trained notebook model)
+            if hasattr(self, 'train_matrix') and self.train_matrix is not None:
+                return self._predict_with_similarity(user_id, item_id)
+
+            # Fallback to global mean
+            return getattr(self, 'global_mean', 3.5)
+
+        except Exception as e:
+            logger.debug(f"Error making prediction: {e}")
+            return getattr(self, 'global_mean', 3.5)
+
+    def _predict_with_similarity(self, user_id, item_id):
+        """Predict using similarity matrices (ensemble of user-based and item-based)"""
+        try:
+            # Check if user and item exist in training data
+            if user_id not in self.train_matrix.index:
+                return self.global_mean if hasattr(self, 'global_mean') else 3.5
+            if item_id not in self.train_matrix.columns:
+                return self.global_mean if hasattr(self, 'global_mean') else 3.5
+
+            # Get indices
+            user_idx = self.train_matrix.index.get_loc(user_id)
+            item_idx = self.train_matrix.columns.get_loc(item_id)
+
+            # User-based prediction
+            user_pred = self._user_based_predict(user_idx, item_idx)
+
+            # Item-based prediction
+            item_pred = self._item_based_predict(user_idx, item_idx)
+
+            # Ensemble: average of user-based and item-based
+            prediction = (user_pred + item_pred) / 2
+            return np.clip(prediction, 1, 5)
+
+        except Exception as e:
+            logger.debug(f"Similarity prediction error: {e}")
+            return self.global_mean if hasattr(self, 'global_mean') else 3.5
+
+    def _user_based_predict(self, user_idx, item_idx):
+        """User-based collaborative filtering prediction"""
+        try:
+            if not hasattr(self, 'user_similarity') or self.user_similarity is None:
+                return self.global_mean
+
+            target_similarities = self.user_similarity[user_idx]
+            item_ratings = self.train_matrix.iloc[:, item_idx]
+
+            # Find users who rated this item
+            rated_mask = ~item_ratings.isna()
+            if not rated_mask.any():
+                return self.user_means[user_idx] if hasattr(self, 'user_means') else self.global_mean
+
+            similarities = target_similarities[rated_mask]
+            ratings = item_ratings[rated_mask].values
+
+            # Use top-k similar users
+            if len(similarities) > 50:
+                top_indices = np.argsort(similarities)[-50:]
+                similarities = similarities[top_indices]
+                ratings = ratings[top_indices]
+
+            # Filter positive similarities
+            pos_mask = similarities > 0.1
+            if not pos_mask.any():
+                return self.user_means[user_idx] if hasattr(self, 'user_means') else self.global_mean
+
+            pos_similarities = similarities[pos_mask]
+            pos_ratings = ratings[pos_mask]
+
+            if np.sum(pos_similarities) > 0:
+                return np.average(pos_ratings, weights=pos_similarities)
+            return self.global_mean
+
+        except Exception:
+            return self.global_mean if hasattr(self, 'global_mean') else 3.5
+
+    def _item_based_predict(self, user_idx, item_idx):
+        """Item-based collaborative filtering prediction"""
+        try:
+            if not hasattr(self, 'item_similarity') or self.item_similarity is None:
+                return self.global_mean
+
+            target_similarities = self.item_similarity[item_idx]
+            user_ratings = self.train_matrix.iloc[user_idx]
+
+            # Find items this user rated
+            rated_mask = ~user_ratings.isna()
+            if not rated_mask.any():
+                return self.global_mean
+
+            similarities = target_similarities[rated_mask]
+            ratings = user_ratings[rated_mask].values
+
+            # Use top-k similar items
+            if len(similarities) > 50:
+                top_indices = np.argsort(similarities)[-50:]
+                similarities = similarities[top_indices]
+                ratings = ratings[top_indices]
+
+            # Filter positive similarities
+            pos_mask = similarities > 0.1
+            if not pos_mask.any():
+                return self.global_mean
+
+            pos_similarities = similarities[pos_mask]
+            pos_ratings = ratings[pos_mask]
+
+            if np.sum(pos_similarities) > 0:
+                return np.average(pos_ratings, weights=pos_similarities)
+            return self.global_mean
+
+        except Exception:
+            return self.global_mean if hasattr(self, 'global_mean') else 3.5
+
+    def recommend(self, user_id, n_recommendations=10, exclude_seen=True):
+        """Get recommendations for a user"""
+        try:
+            recommendations = []
+
+            if self.model and self.trainset:
+                # Get all items
+                all_items = list(range(1, 200))  # Dummy item range
+
+                # Generate predictions
+                for item_id in all_items[:n_recommendations * 2]:
+                    try:
+                        pred = self.predict(user_id, item_id)
+                        recommendations.append({
+                            'item_id': item_id,
+                            'predicted_rating': pred,
+                            'confidence': 0.8
+                        })
+                    except:
+                        continue
+
+                # Sort by predicted rating
+                recommendations.sort(key=lambda x: x['predicted_rating'], reverse=True)
+                return recommendations[:n_recommendations]
+            else:
+                # Return dummy recommendations
+                return [
+                    {'item_id': i, 'predicted_rating': self.global_mean, 'confidence': 0.5}
+                    for i in range(101, 101 + n_recommendations)
+                ]
+
+        except Exception as e:
+            logger.error(f"Error generating recommendations: {e}")
+            return []
+
+    def _create_fallback_model(self, ratings_data=None):
+        """Create fallback collaborative filtering model when surprise is not available"""
+        logger.info("Creating fallback collaborative filtering model")
+
+        # Create dummy model state
+        self.global_mean = 3.5
+        self.user_mean = {i: 3.5 + (i % 5 - 2) * 0.2 for i in range(1, 101)}
+        self.item_mean = {i: 3.5 + (i % 7 - 3) * 0.15 for i in range(101, 201)}
+
+        # Simple fallback prediction function
+        def fallback_predict(user_id, item_id):
+            user_bias = self.user_mean.get(user_id, 3.5) - self.global_mean
+            item_bias = self.item_mean.get(item_id, 3.5) - self.global_mean
+            prediction = self.global_mean + user_bias + item_bias
+            return max(1.0, min(5.0, prediction))
+
+        self.model = type('FallbackModel', (), {'predict': lambda self, user_id, item_id: fallback_predict(user_id, item_id)})()
+        logger.info("Fallback collaborative filtering model created")
+
+class FinalHybridRecommender:
+    """Final working hybrid with proper evaluation methodology"""
+
+    def __init__(self):
+        # Configuration (from notebook)
+        self.CONTENT_WEIGHT = 0.4  # 40%
+        self.COLLABORATIVE_WEIGHT = 0.6  # 60%
+        self.RELEVANCE_THRESHOLD = 3.5
+
+        # Data
+        self.ratings_df = None
+        self.exercises_df = None
+        self.user_item_matrix = None
+
+        # Trained CF model (loaded separately for better predictions)
+        self.trained_cf_model = None
+        self.use_trained_cf = False
+
+        logger.info(f"Initialized FinalHybridRecommender")
+        logger.info(f"Content Weight: {self.CONTENT_WEIGHT} (40%)")
+        logger.info(f"Collaborative Weight: {self.COLLABORATIVE_WEIGHT} (60%)")
+        logger.info(f"Relevance Threshold: {self.RELEVANCE_THRESHOLD}+ stars")
+
+    def set_trained_cf_model(self, cf_model_data):
+        """Set the trained collaborative filtering model for better predictions"""
+        try:
+            if cf_model_data and 'cf_model' in cf_model_data:
+                self.trained_cf_model = cf_model_data['cf_model']
+                self.use_trained_cf = True
+                logger.info("Trained CF model loaded successfully - will use for hybrid recommendations")
+                logger.info(f"CF model method: {cf_model_data.get('best_method', 'ensemble')}")
+            else:
+                logger.warning("No valid CF model data provided")
+        except Exception as e:
+            logger.error(f"Error setting trained CF model: {e}")
+            self.use_trained_cf = False
+
+    def load_data_from_database(self, tracking_conn, content_conn):
+        """Load data from production databases"""
+        logger.info("Loading data from production databases...")
+
+        # Load ratings from tracking database
+        logger.info("Fetching workout_exercise_ratings...")
+        ratings_query = """
+        SELECT
+            user_id,
+            exercise_id,
+            rating_value as rating,
+            difficulty_perceived,
+            enjoyment_rating,
+            would_do_again,
+            rated_at as timestamp
+        FROM workout_exercise_ratings
+        WHERE completed = 1
+        """
+        self.ratings_df = pd.read_sql(ratings_query, tracking_conn)
+        logger.info(f"Loaded {len(self.ratings_df)} ratings")
+
+        # Load exercises from content database
+        logger.info("Fetching exercises...")
+        exercises_query = """
+        SELECT
+            exercise_id,
+            exercise_name,
+            target_muscle_group,
+            difficulty_level,
+            equipment_needed,
+            default_duration_seconds,
+            calories_burned_per_minute,
+            instructions
+        FROM exercises
+        """
+        self.exercises_df = pd.read_sql(exercises_query, content_conn)
+
+        # difficulty_level is already numeric (1, 2, 3) in production database
+        # No conversion needed, but ensure it's int
+        self.exercises_df['difficulty_level'] = self.exercises_df['difficulty_level'].fillna(2).astype(int)
+
+        logger.info(f"Loaded {len(self.exercises_df)} exercises")
+
+        # Create user-item matrix
+        self.user_item_matrix = self.ratings_df.pivot_table(
+            index='user_id',
+            columns='exercise_id',
+            values='rating',
+            fill_value=np.nan
+        )
+        logger.info(f"Matrix shape: {self.user_item_matrix.shape}")
+
+        # Calculate sparsity
+        sparsity = 1 - (self.user_item_matrix.count().sum() /
+                       (self.user_item_matrix.shape[0] * self.user_item_matrix.shape[1]))
+        logger.info(f"Matrix sparsity: {sparsity:.3f} ({sparsity*100:.1f}%)")
+
+    def get_user_context(self, user_id: int) -> Dict:
+        """Get comprehensive user context"""
+        user_ratings = self.ratings_df[self.ratings_df['user_id'] == user_id]
+
+        if user_ratings.empty:
+            return {
+                'avg_rating': 3.0,
+                'rating_count': 0,
+                'preferred_muscle_groups': ['core'],
+                'preferred_difficulty': 2,
+                'preferred_equipment': ['bodyweight'],
+                'avg_calories': 5.0
+            }
+
+        detailed = user_ratings.merge(self.exercises_df, on='exercise_id', how='left')
+
+        avg_rating = user_ratings['rating'].mean()
+        rating_count = len(user_ratings)
+
+        muscle_groups = detailed['target_muscle_group'].value_counts().head(2).index.tolist()
+        avg_difficulty = detailed['difficulty_level'].mean()
+        equipment = detailed['equipment_needed'].value_counts().head(2).index.tolist()
+        avg_calories = detailed[detailed['rating'] >= 3.5]['calories_burned_per_minute'].mean()
+
+        return {
+            'avg_rating': avg_rating,
+            'rating_count': rating_count,
+            'preferred_muscle_groups': muscle_groups if muscle_groups else ['core'],
+            'preferred_difficulty': avg_difficulty if not pd.isna(avg_difficulty) else 2,
+            'preferred_equipment': equipment if equipment else ['bodyweight'],
+            'avg_calories': avg_calories if not pd.isna(avg_calories) else 5.0
+        }
+
+    def calculate_cf_score(self, user_id: int, exercise_id: int, user_context: Dict) -> float:
+        """Collaborative filtering score based on trained CF model or fallback heuristics"""
+
+        # PRIORITY 1: Use trained CF model if available (achieves 47% hit rate)
+        if self.use_trained_cf and self.trained_cf_model is not None:
+            try:
+                # The trained CF model uses predict(user_id, item_id) method
+                # It returns a rating prediction between 1-5
+                if hasattr(self.trained_cf_model, 'predict'):
+                    predicted_rating = self.trained_cf_model.predict(user_id, exercise_id)
+                elif hasattr(self.trained_cf_model, 'predict_rating'):
+                    predicted_rating = self.trained_cf_model.predict_rating(
+                        user_id, exercise_id, method='ensemble'
+                    )
+                else:
+                    raise AttributeError("CF model has no predict method")
+
+                # Normalize to 0-1 scale (ratings are 1-5)
+                cf_score = (predicted_rating - 1) / 4
+                return min(1.0, max(0.0, cf_score))
+            except Exception as e:
+                logger.debug(f"Trained CF prediction failed for user {user_id}, exercise {exercise_id}: {e}")
+                # Fall through to heuristic method
+
+        # FALLBACK: Heuristic-based CF scoring
+        if self.user_item_matrix is None:
+            return 0.4
+
+        if (user_id not in self.user_item_matrix.index or
+            exercise_id not in self.user_item_matrix.columns):
+            return 0.4
+
+        if not pd.isna(self.user_item_matrix.loc[user_id, exercise_id]):
+            return 0.1  # Already rated - low score to avoid re-recommending
+
+        user_ratings = self.user_item_matrix.loc[user_id].dropna()
+        exercise_ratings = self.user_item_matrix[exercise_id].dropna()
+
+        if len(user_ratings) == 0 or len(exercise_ratings) == 0:
+            return 0.4
+
+        user_avg = user_ratings.mean()
+        exercise_avg = exercise_ratings.mean()
+
+        common_users = len(exercise_ratings)
+        popularity_score = min(1.0, common_users / 20)
+
+        if user_context['rating_count'] > 5:
+            prediction = 0.7 * user_avg + 0.3 * exercise_avg
+        else:
+            prediction = 0.4 * user_avg + 0.6 * exercise_avg
+
+        prediction += 0.1 * popularity_score
+
+        cf_score = (prediction - 1) / 4
+        return min(1.0, max(0.0, cf_score))
+
+    def calculate_content_score(self, user_id: int, exercise_id: int, user_context: Dict) -> float:
+        """Content-based score using exercise attributes"""
+
+        exercise_data = self.exercises_df[self.exercises_df['exercise_id'] == exercise_id]
+        if exercise_data.empty:
+            return 0.1
+
+        exercise = exercise_data.iloc[0]
+        score = 0.0
+
+        # Muscle group matching
+        if exercise['target_muscle_group'] in user_context['preferred_muscle_groups']:
+            score += 0.4
+        else:
+            muscle_compatibility = {
+                ('core', 'upper_body'): 0.15,
+                ('upper_body', 'core'): 0.15,
+                ('core', 'lower_body'): 0.1,
+                ('lower_body', 'core'): 0.1,
+                ('upper_body', 'lower_body'): 0.05,
+                ('lower_body', 'upper_body'): 0.05
+            }
+
+            for pref_muscle in user_context['preferred_muscle_groups']:
+                compatibility = muscle_compatibility.get((exercise['target_muscle_group'], pref_muscle), 0)
+                score += compatibility
+
+        # Difficulty matching - give STRONG boost when target fitness level is set
+        difficulty_diff = abs(exercise['difficulty_level'] - user_context['preferred_difficulty'])
+        has_target_fitness = 'target_fitness_level' in user_context
+
+        if difficulty_diff == 0:
+            # Exact match - give extra boost when target fitness level is explicitly set
+            # This ensures advanced users get difficulty 3 exercises even if they're new
+            score += 0.45 if has_target_fitness else 0.25
+        elif difficulty_diff == 1:
+            score += 0.15
+        else:
+            # Penalize exercises that are too far from target difficulty
+            score += max(0, 0.10 - (difficulty_diff * 0.05))
+
+        # Equipment accessibility (reduced — all exercises are bodyweight)
+        if exercise['equipment_needed'] in user_context['preferred_equipment']:
+            score += 0.05
+        elif exercise['equipment_needed'] == 'bodyweight':
+            score += 0.03
+
+        # Calorie preference matching (new — uses avg_calories from user context)
+        user_avg_cal = user_context.get('avg_calories', 5.0)
+        cal_diff = abs(exercise['calories_burned_per_minute'] - user_avg_cal)
+        cal_match = max(0, 1.0 - cal_diff / 5.0)
+        score += 0.20 * cal_match
+
+        # Duration quality (reduced — all tabata exercises have similar duration)
+        duration_score = 1.0 - min(1.0, exercise['default_duration_seconds'] / 120)
+        score += 0.02 * duration_score
+
+        return min(1.0, max(0.0, score))
+
+    def get_hybrid_recommendations(self, user_id: int, num_recs: int = 10, target_fitness_level: str = None) -> List[Dict]:
+        """Get hybrid recommendations with optional fitness level filtering
+
+        Args:
+            user_id: User ID for recommendations
+            num_recs: Number of recommendations to return
+            target_fitness_level: User's configured fitness level (beginner/intermediate/advanced)
+                                  Used to boost exercises matching the target difficulty
+        """
+
+        user_context = self.get_user_context(user_id)
+
+        # Override preferred_difficulty with target fitness level if provided
+        # This ensures advanced users get difficulty 3 exercises even if they haven't rated any yet
+        if target_fitness_level:
+            fitness_to_difficulty = {
+                'beginner': 1,
+                'intermediate': 2,
+                'advanced': 3,
+                'expert': 3
+            }
+            target_difficulty = fitness_to_difficulty.get(target_fitness_level.lower(), 2)
+            user_context['preferred_difficulty'] = target_difficulty
+            user_context['target_fitness_level'] = target_fitness_level
+            logger.info(f"[HYBRID] Overriding preferred_difficulty with target fitness level: {target_fitness_level} -> difficulty {target_difficulty}")
+
+        rated_exercises = set(self.ratings_df[self.ratings_df['user_id'] == user_id]['exercise_id'].values)
+        all_exercises = self.exercises_df['exercise_id'].tolist()
+        candidate_exercises = [eid for eid in all_exercises if eid not in rated_exercises]
+
+        scored_exercises = []
+
+        for exercise_id in candidate_exercises:
+            cf_score = self.calculate_cf_score(user_id, exercise_id, user_context)
+            content_score = self.calculate_content_score(user_id, exercise_id, user_context)
+
+            hybrid_score = (
+                self.CONTENT_WEIGHT * content_score +
+                self.COLLABORATIVE_WEIGHT * cf_score
+            )
+
+            scored_exercises.append({
+                'exercise_id': exercise_id,
+                'hybrid_score': hybrid_score,
+                'content_score': content_score,
+                'cf_score': cf_score
+            })
+
+        scored_exercises.sort(key=lambda x: x['hybrid_score'], reverse=True)
+
+        recommendations = []
+        for item in scored_exercises[:num_recs]:
+            exercise_data = self.exercises_df[self.exercises_df['exercise_id'] == item['exercise_id']].iloc[0]
+
+            rec = {
+                'exercise_id': int(item['exercise_id']),
+                'exercise_name': str(exercise_data['exercise_name']),
+                'target_muscle_group': str(exercise_data['target_muscle_group']),
+                'difficulty_level': int(exercise_data['difficulty_level']),
+                'equipment_needed': str(exercise_data['equipment_needed']),
+                'hybrid_score': float(item['hybrid_score']),
+                'content_score': float(item['content_score']),
+                'cf_score': float(item['cf_score']),
+                'calories_burned_per_minute': float(exercise_data['calories_burned_per_minute'])
+            }
+            recommendations.append(rec)
+
+        return recommendations
+
+
+# =============================================================================
+# PRODUCTION CLASSES (for models trained on real production data)
+# =============================================================================
+
+class ProductionCollaborativeFiltering:
+    """CF model trained on production data (586 real ratings)"""
+
+    def __init__(self, min_user_ratings=3, min_exercise_ratings=2):
+        self.min_user_ratings = min_user_ratings
+        self.min_exercise_ratings = min_exercise_ratings
+        self.train_matrix = None
+        self.user_similarity = None
+        self.item_similarity = None
+        self.user_means = None
+        self.global_mean = 3.5
+        self.user_ids = []
+        self.exercise_ids = []
+
+    def fit(self, ratings_df):
+        """Train on production ratings data"""
+        logger.info("Training Production CF on real data...")
+
+        user_counts = ratings_df['user_id'].value_counts()
+        valid_users = user_counts[user_counts >= self.min_user_ratings].index
+
+        exercise_counts = ratings_df['exercise_id'].value_counts()
+        valid_exercises = exercise_counts[exercise_counts >= self.min_exercise_ratings].index
+
+        filtered_df = ratings_df[
+            (ratings_df['user_id'].isin(valid_users)) &
+            (ratings_df['exercise_id'].isin(valid_exercises))
+        ]
+
+        if len(filtered_df) < 10:
+            self.global_mean = ratings_df['rating'].mean() if len(ratings_df) > 0 else 3.5
+            return self
+
+        self.train_matrix = filtered_df.pivot_table(
+            index='user_id', columns='exercise_id',
+            values='rating', fill_value=np.nan
+        )
+
+        self.user_ids = list(self.train_matrix.index)
+        self.exercise_ids = list(self.train_matrix.columns)
+        self.global_mean = filtered_df['rating'].mean()
+        self.user_means = self.train_matrix.mean(axis=1).values
+
+        self._compute_similarities()
+        return self
+
+    def _compute_similarities(self):
+        """Compute user and item similarity matrices"""
+        matrix = self.train_matrix.values.copy()
+
+        centered = matrix.copy()
+        for i, mean in enumerate(self.user_means):
+            if not np.isnan(mean):
+                mask = ~np.isnan(matrix[i])
+                centered[i][mask] -= mean
+        centered = np.nan_to_num(centered)
+        self.user_similarity = cosine_similarity(centered)
+
+        item_matrix = matrix.T
+        item_means = np.nanmean(item_matrix, axis=1)
+        centered_items = item_matrix.copy()
+        for i, mean in enumerate(item_means):
+            if not np.isnan(mean):
+                mask = ~np.isnan(item_matrix[i])
+                centered_items[i][mask] -= mean
+        centered_items = np.nan_to_num(centered_items)
+        self.item_similarity = cosine_similarity(centered_items)
+
+    def predict(self, user_id, exercise_id):
+        """Predict rating for user-exercise pair"""
+        try:
+            if user_id not in self.user_ids or exercise_id not in self.exercise_ids:
+                return self.global_mean
+
+            user_idx = self.user_ids.index(user_id)
+            item_idx = self.exercise_ids.index(exercise_id)
+
+            user_pred = self._user_predict(user_idx, item_idx)
+            item_pred = self._item_predict(user_idx, item_idx)
+
+            return np.clip((user_pred + item_pred) / 2, 1, 5)
+        except:
+            return self.global_mean
+
+    def _user_predict(self, user_idx, item_idx):
+        if self.user_similarity is None:
+            return self.global_mean
+
+        sims = self.user_similarity[user_idx]
+        ratings = self.train_matrix.iloc[:, item_idx]
+        mask = ~ratings.isna()
+
+        if not mask.any():
+            return self.user_means[user_idx] if user_idx < len(self.user_means) else self.global_mean
+
+        s, r = sims[mask], ratings[mask].values
+        if len(s) > 20:
+            idx = np.argsort(s)[-20:]
+            s, r = s[idx], r[idx]
+
+        pos = s > 0.1
+        if pos.any() and np.sum(s[pos]) > 0:
+            return np.average(r[pos], weights=s[pos])
+        return self.global_mean
+
+    def _item_predict(self, user_idx, item_idx):
+        if self.item_similarity is None:
+            return self.global_mean
+
+        sims = self.item_similarity[item_idx]
+        ratings = self.train_matrix.iloc[user_idx]
+        mask = ~ratings.isna()
+
+        if not mask.any():
+            return self.global_mean
+
+        s, r = sims[mask], ratings[mask].values
+        if len(s) > 20:
+            idx = np.argsort(s)[-20:]
+            s, r = s[idx], r[idx]
+
+        pos = s > 0.1
+        if pos.any() and np.sum(s[pos]) > 0:
+            return np.average(r[pos], weights=s[pos])
+        return self.global_mean
+
+
+class ProductionHybridRecommender:
+    """Hybrid model trained on production data"""
+
+    def __init__(self):
+        self.CONTENT_WEIGHT = 0.4
+        self.COLLABORATIVE_WEIGHT = 0.6
+        self.RELEVANCE_THRESHOLD = 3.5
+        self.ratings_df = None
+        self.exercises_df = None
+        self.user_item_matrix = None
+        self.trained_cf_model = None
+        self.use_trained_cf = False
+
+    def fit(self, ratings_df, exercises_df, cf_model=None):
+        self.ratings_df = ratings_df.copy() if ratings_df is not None else pd.DataFrame()
+        self.exercises_df = exercises_df.copy() if exercises_df is not None else pd.DataFrame()
+
+        if cf_model:
+            self.trained_cf_model = cf_model
+            self.use_trained_cf = True
+
+        if len(self.ratings_df) > 0:
+            self.user_item_matrix = self.ratings_df.pivot_table(
+                index='user_id', columns='exercise_id',
+                values='rating', fill_value=np.nan
+            )
+        return self
+
+    def set_trained_cf_model(self, cf_model_data):
+        if cf_model_data and 'cf_model' in cf_model_data:
+            self.trained_cf_model = cf_model_data['cf_model']
+            self.use_trained_cf = True
+
+    def get_user_context(self, user_id):
+        if self.ratings_df is None or len(self.ratings_df) == 0:
+            return {'avg_rating': 3.0, 'rating_count': 0,
+                    'preferred_muscle_groups': ['core'],
+                    'preferred_difficulty': 2,
+                    'preferred_equipment': ['bodyweight']}
+
+        user_ratings = self.ratings_df[self.ratings_df['user_id'] == user_id]
+        if user_ratings.empty:
+            return {'avg_rating': 3.0, 'rating_count': 0,
+                    'preferred_muscle_groups': ['core'],
+                    'preferred_difficulty': 2,
+                    'preferred_equipment': ['bodyweight']}
+
+        if self.exercises_df is not None and len(self.exercises_df) > 0:
+            detailed = user_ratings.merge(self.exercises_df, on='exercise_id', how='left')
+            return {
+                'avg_rating': user_ratings['rating'].mean(),
+                'rating_count': len(user_ratings),
+                'preferred_muscle_groups': detailed['target_muscle_group'].value_counts().head(2).index.tolist() or ['core'],
+                'preferred_difficulty': detailed['difficulty_level'].mean() if 'difficulty_level' in detailed else 2,
+                'preferred_equipment': detailed['equipment_needed'].value_counts().head(2).index.tolist() if 'equipment_needed' in detailed else ['bodyweight']
+            }
+        return {'avg_rating': user_ratings['rating'].mean(), 'rating_count': len(user_ratings),
+                'preferred_muscle_groups': ['core'], 'preferred_difficulty': 2,
+                'preferred_equipment': ['bodyweight']}
+
+    def calculate_cf_score(self, user_id, exercise_id, user_context):
+        if self.use_trained_cf and self.trained_cf_model:
+            try:
+                pred = self.trained_cf_model.predict(user_id, exercise_id)
+                return (pred - 1) / 4
+            except:
+                pass
+        return 0.5
+
+    def calculate_content_score(self, user_id, exercise_id, user_context):
+        if self.exercises_df is None or len(self.exercises_df) == 0:
+            return 0.5
+
+        ex = self.exercises_df[self.exercises_df['exercise_id'] == exercise_id]
+        if ex.empty:
+            return 0.1
+        ex = ex.iloc[0]
+        score = 0.0
+        if ex.get('target_muscle_group') in user_context['preferred_muscle_groups']:
+            score += 0.4
+        diff = abs(ex.get('difficulty_level', 2) - user_context['preferred_difficulty'])
+        has_target_fitness = 'target_fitness_level' in user_context
+        if diff == 0:
+            # Exact match - give extra boost when target fitness level is explicitly set
+            score += 0.45 if has_target_fitness else 0.25
+        elif diff == 1:
+            score += 0.15
+        if ex.get('equipment_needed') in user_context['preferred_equipment']:
+            score += 0.2
+        elif ex.get('equipment_needed') == 'bodyweight':
+            score += 0.15
+        return min(1.0, score)
+
+    def get_hybrid_recommendations(self, user_id, num_recs=10, target_fitness_level=None):
+        if self.exercises_df is None or len(self.exercises_df) == 0:
+            return []
+
+        ctx = self.get_user_context(user_id)
+
+        # Override preferred_difficulty with target fitness level if provided
+        if target_fitness_level:
+            fitness_to_difficulty = {
+                'beginner': 1,
+                'intermediate': 2,
+                'advanced': 3,
+                'expert': 3
+            }
+            ctx['preferred_difficulty'] = fitness_to_difficulty.get(target_fitness_level.lower(), 2)
+            ctx['target_fitness_level'] = target_fitness_level
+
+        if self.ratings_df is not None and len(self.ratings_df) > 0:
+            rated = set(self.ratings_df[self.ratings_df['user_id'] == user_id]['exercise_id'])
+        else:
+            rated = set()
+
+        candidates = [e for e in self.exercises_df['exercise_id'] if e not in rated]
+
+        scored = []
+        for eid in candidates:
+            cf = self.calculate_cf_score(user_id, eid, ctx)
+            content = self.calculate_content_score(user_id, eid, ctx)
+            hybrid = self.CONTENT_WEIGHT * content + self.COLLABORATIVE_WEIGHT * cf
+            scored.append({'exercise_id': eid, 'hybrid_score': hybrid,
+                          'content_score': content, 'cf_score': cf})
+
+        scored.sort(key=lambda x: x['hybrid_score'], reverse=True)
+
+        recs = []
+        for item in scored[:num_recs]:
+            ex = self.exercises_df[self.exercises_df['exercise_id'] == item['exercise_id']]
+            if ex.empty:
+                continue
+            ex = ex.iloc[0]
+            recs.append({
+                'exercise_id': int(item['exercise_id']),
+                'exercise_name': str(ex.get('exercise_name', 'Unknown')),
+                'target_muscle_group': str(ex.get('target_muscle_group', 'unknown')),
+                'difficulty_level': int(ex.get('difficulty_level', 2)),
+                'equipment_needed': str(ex.get('equipment_needed', 'bodyweight')),
+                'hybrid_score': float(item['hybrid_score']),
+                'content_score': float(item['content_score']),
+                'cf_score': float(item['cf_score'])
+            })
+        return recs
