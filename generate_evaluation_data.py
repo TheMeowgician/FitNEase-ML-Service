@@ -29,77 +29,77 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 ARCHETYPES = {
-    'upper_body_focused': {
+    'upper_advanced': {
         'preferred_muscles': ['upper_body'],
         'secondary_muscles': ['core'],
-        'disliked_muscles': ['flexibility'],
-        'preferred_difficulty': 2,
-        'preferred_equipment': ['dumbbells', 'barbell'],
-        'fitness_level': 'intermediate',
-        'age_range': (22, 35),
-    },
-    'core_flexibility': {
-        'preferred_muscles': ['core', 'flexibility'],
-        'secondary_muscles': ['lower_body'],
-        'disliked_muscles': ['upper_body'],
-        'preferred_difficulty': 1,
-        'preferred_equipment': ['bodyweight', 'yoga_mat'],
-        'fitness_level': 'beginner',
-        'age_range': (25, 45),
-    },
-    'powerlifter': {
-        'preferred_muscles': ['lower_body', 'upper_body'],
-        'secondary_muscles': ['core'],
-        'disliked_muscles': ['flexibility'],
+        'disliked_muscles': ['lower_body'],
         'preferred_difficulty': 3,
-        'preferred_equipment': ['barbell', 'dumbbells'],
-        'fitness_level': 'advanced',
-        'age_range': (20, 38),
-    },
-    'full_body_cardio': {
-        'preferred_muscles': ['full_body'],
-        'secondary_muscles': ['core', 'lower_body'],
-        'disliked_muscles': [],
-        'preferred_difficulty': 2,
-        'preferred_equipment': ['bodyweight', 'kettlebell'],
-        'fitness_level': 'intermediate',
-        'age_range': (18, 40),
-    },
-    'home_workout': {
-        'preferred_muscles': ['core', 'full_body'],
-        'secondary_muscles': ['upper_body', 'lower_body'],
-        'disliked_muscles': [],
-        'preferred_difficulty': 1,
-        'preferred_equipment': ['bodyweight', 'resistance_bands'],
-        'fitness_level': 'beginner',
-        'age_range': (18, 54),
-    },
-    'advanced_athlete': {
-        'preferred_muscles': ['full_body', 'upper_body', 'lower_body'],
-        'secondary_muscles': ['core'],
-        'disliked_muscles': [],
-        'preferred_difficulty': 3,
-        'preferred_equipment': ['barbell', 'cable_machine', 'kettlebell'],
+        'preferred_equipment': ['bodyweight'],
         'fitness_level': 'advanced',
         'age_range': (20, 35),
     },
-    'lower_body_specialist': {
+    'upper_beginner': {
+        'preferred_muscles': ['upper_body'],
+        'secondary_muscles': ['core'],
+        'disliked_muscles': ['lower_body'],
+        'preferred_difficulty': 1,
+        'preferred_equipment': ['bodyweight'],
+        'fitness_level': 'beginner',
+        'age_range': (18, 40),
+    },
+    'lower_advanced': {
         'preferred_muscles': ['lower_body'],
-        'secondary_muscles': ['core', 'full_body'],
+        'secondary_muscles': ['core'],
         'disliked_muscles': ['upper_body'],
+        'preferred_difficulty': 3,
+        'preferred_equipment': ['bodyweight'],
+        'fitness_level': 'advanced',
+        'age_range': (22, 38),
+    },
+    'lower_beginner': {
+        'preferred_muscles': ['lower_body'],
+        'secondary_muscles': ['core'],
+        'disliked_muscles': ['upper_body'],
+        'preferred_difficulty': 1,
+        'preferred_equipment': ['bodyweight'],
+        'fitness_level': 'beginner',
+        'age_range': (18, 54),
+    },
+    'core_beginner': {
+        'preferred_muscles': ['core'],
+        'secondary_muscles': ['lower_body'],
+        'disliked_muscles': ['upper_body'],
+        'preferred_difficulty': 1,
+        'preferred_equipment': ['bodyweight'],
+        'fitness_level': 'beginner',
+        'age_range': (25, 45),
+    },
+    'core_intermediate': {
+        'preferred_muscles': ['core'],
+        'secondary_muscles': ['upper_body'],
+        'disliked_muscles': ['lower_body'],
         'preferred_difficulty': 2,
-        'preferred_equipment': ['barbell', 'dumbbells', 'bodyweight'],
+        'preferred_equipment': ['bodyweight'],
+        'fitness_level': 'intermediate',
+        'age_range': (20, 38),
+    },
+    'balanced_mid': {
+        'preferred_muscles': ['upper_body', 'lower_body'],
+        'secondary_muscles': ['core'],
+        'disliked_muscles': [],
+        'preferred_difficulty': 2,
+        'preferred_equipment': ['bodyweight'],
         'fitness_level': 'intermediate',
         'age_range': (22, 42),
     },
-    'wellness_seeker': {
-        'preferred_muscles': ['flexibility', 'core'],
-        'secondary_muscles': ['full_body'],
-        'disliked_muscles': ['upper_body'],
-        'preferred_difficulty': 1,
-        'preferred_equipment': ['yoga_mat', 'bodyweight', 'resistance_bands'],
-        'fitness_level': 'beginner',
-        'age_range': (30, 54),
+    'heavy_compound': {
+        'preferred_muscles': ['lower_body', 'upper_body'],
+        'secondary_muscles': ['core'],
+        'disliked_muscles': [],
+        'preferred_difficulty': 3,
+        'preferred_equipment': ['bodyweight'],
+        'fitness_level': 'advanced',
+        'age_range': (22, 35),
     },
 }
 
@@ -176,33 +176,32 @@ def load_exercises(content_conn):
 # ============================================================
 
 def calculate_rating(archetype, exercise):
-    """Generate a rating with strong, learnable preference patterns."""
+    """Generate a rating with strong, learnable preference patterns.
+
+    With only bodyweight equipment, signals come from muscle group + difficulty.
+    Boosted signals to compensate for no equipment differentiation.
+    """
     base = 3.0
     mg = exercise['target_muscle_group'] or 'core'
     diff = exercise['difficulty_level'] or 2
-    equip = exercise['equipment_needed'] or 'bodyweight'
 
-    # Muscle group preference: biggest signal
+    # Muscle group preference: strongest signal (+1.5 / +0.4 / -1.2)
     if mg in archetype['preferred_muscles']:
-        base += 1.2
+        base += 1.5
     elif mg in archetype['secondary_muscles']:
-        base += 0.5
+        base += 0.4
     elif mg in archetype.get('disliked_muscles', []):
-        base -= 0.8
+        base -= 1.2
 
-    # Difficulty match
+    # Difficulty match: strong secondary signal (+0.7 / -0.5 per level gap)
     diff_gap = abs(diff - archetype['preferred_difficulty'])
     if diff_gap == 0:
-        base += 0.5
+        base += 0.7
     else:
-        base -= 0.3 * diff_gap
+        base -= 0.5 * diff_gap
 
-    # Equipment match
-    if equip in archetype['preferred_equipment']:
-        base += 0.3
-
-    # Gaussian noise for realism
-    noise = random.gauss(0, 0.4)
+    # Gaussian noise (reduced to keep signal clearer)
+    noise = random.gauss(0, 0.3)
     rating = base + noise
     return round(max(1.0, min(5.0, rating)), 2)
 
