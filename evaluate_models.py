@@ -257,14 +257,23 @@ def evaluate_random_forest(ratings_df, exercises_df, users_df):
         'calories_burned_per_minute',
     ]
 
-    # Add derived features where available
+    # Add derived features where available (encode strings to numeric)
     if 'difficulty_perceived' in merged.columns:
-        merged['difficulty_perceived'] = merged['difficulty_perceived'].fillna(
-            merged['difficulty_level']
-        )
-        feature_cols.append('difficulty_perceived')
+        # May be string ('easy','moderate','challenging','hard') or numeric
+        if merged['difficulty_perceived'].dtype == 'object':
+            diff_map = {'easy': 1, 'moderate': 2, 'challenging': 3, 'hard': 4, 'very_hard': 5}
+            merged['difficulty_perceived_numeric'] = merged['difficulty_perceived'].map(diff_map).fillna(2)
+            feature_cols.append('difficulty_perceived_numeric')
+        else:
+            merged['difficulty_perceived'] = merged['difficulty_perceived'].fillna(
+                merged['difficulty_level']
+            )
+            feature_cols.append('difficulty_perceived')
     if 'enjoyment_rating' in merged.columns:
-        merged['enjoyment_rating'] = merged['enjoyment_rating'].fillna(3)
+        if merged['enjoyment_rating'].dtype == 'object':
+            merged['enjoyment_rating'] = pd.to_numeric(merged['enjoyment_rating'], errors='coerce').fillna(3)
+        else:
+            merged['enjoyment_rating'] = merged['enjoyment_rating'].fillna(3)
         feature_cols.append('enjoyment_rating')
 
     X = merged[feature_cols].fillna(0).values
