@@ -402,7 +402,7 @@ def evaluate_collaborative(ratings_df):
     logger.info(f"Train: {len(train_df)}, Test: {len(test_df)}")
 
     cf_train = train_df[['user_id', 'exercise_id', 'rating']].rename(columns={'exercise_id': 'item_id'})
-    cf_model = ProperCollaborativeFiltering(algorithm='SVD', n_factors=10, reg_all=0.01)
+    cf_model = ProperCollaborativeFiltering(algorithm='SVD', n_factors=20)
     cf_model.fit(ratings_data=cf_train)
 
     all_exercise_ids = sorted(ratings_df['exercise_id'].unique())
@@ -499,7 +499,7 @@ def evaluate_hybrid(ratings_df, exercises_df):
 
     # Train CF component
     cf_train = train_df[['user_id', 'exercise_id', 'rating']].rename(columns={'exercise_id': 'item_id'})
-    cf_model = ProperCollaborativeFiltering(algorithm='SVD', n_factors=10, reg_all=0.01)
+    cf_model = ProperCollaborativeFiltering(algorithm='SVD', n_factors=20)
     cf_model.fit(ratings_data=cf_train)
 
     # Build hybrid
