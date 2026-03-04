@@ -103,8 +103,8 @@ ARCHETYPES = {
     },
 }
 
-USERS_PER_ARCHETYPE = 25  # 8 × 25 = 200 users
-RATINGS_PER_USER = (40, 55)
+USERS_PER_ARCHETYPE = 30  # 8 × 30 = 240 users
+RATINGS_PER_USER = (50, 65)
 
 
 # ============================================================
@@ -438,6 +438,7 @@ def cleanup_previous_eval_data(auth_conn, tracking_conn):
 # ============================================================
 
 def main():
+    random.seed(42)  # reproducible data generation
     logger.info("=" * 60)
     logger.info("GENERATING HIGH-QUALITY EVALUATION DATA")
     logger.info("=" * 60)
