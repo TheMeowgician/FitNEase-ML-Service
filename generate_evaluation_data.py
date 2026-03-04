@@ -207,35 +207,34 @@ def calculate_rating(archetype, exercise):
     return round(max(1.0, min(5.0, rating)), 2)
 
 
-def select_exercises_for_user(archetype, by_muscle, all_exercises, num_ratings):
-    """Select exercises biased toward the archetype's preferences."""
-    selected = []
+def build_core_exercise_sets(by_muscle, all_exercises):
+    """Pre-select shared exercise sets for CF overlap.
 
-    # 55% from preferred muscles
-    preferred_count = int(num_ratings * 0.55)
-    # 25% from secondary muscles
-    secondary_count = int(num_ratings * 0.25)
-    # 20% from other/disliked (creates negative signal)
-    other_count = num_ratings - preferred_count - secondary_count
+    Returns:
+        popular: 15 exercises ALL users rate (global popularity)
+        core_by_muscle: {muscle_group: [20 exercises]} — shared within archetype
+    """
+    rng = random.Random(42)  # deterministic
 
-    # Gather preferred exercises
-    preferred_pool = []
-    for mg in archetype['preferred_muscles']:
-        preferred_pool.extend(by_muscle.get(mg, []))
+    # 15 popular exercises from mixed muscle groups (every user rates these)
+    popular = []
+    for mg in sorted(by_muscle.keys()):
+        pool = by_muscle[mg]
+        popular.extend(rng.sample(pool, min(5, len(pool))))
+    popular = popular[:15]
 
-    # Gather secondary exercises
-    secondary_pool = []
-    for mg in archetype['secondary_muscles']:
-        secondary_pool.extend(by_muscle.get(mg, []))
-
-    # Gather other exercises (everything else)
-    pref_and_sec = set(archetype['preferred_muscles'] + archetype['secondary_muscles'])
-    other_pool = []
+    # 20 core exercises per muscle group (shared among archetype users)
+    core_by_muscle = {}
     for mg, exs in by_muscle.items():
-        if mg not in pref_and_sec:
-            other_pool.extend(exs)
+        core_by_muscle[mg] = rng.sample(exs, min(20, len(exs)))
 
-    # Sample from each pool (with fallback if pool is too small)
+    return popular, core_by_muscle
+
+
+def select_exercises_for_user(archetype, by_muscle, all_exercises, num_ratings,
+                               popular_exercises, core_by_muscle):
+    """Select exercises with SHARED core sets for CF overlap + random variety."""
+
     def safe_sample(pool, count):
         if len(pool) == 0:
             return []
@@ -243,26 +242,55 @@ def select_exercises_for_user(archetype, by_muscle, all_exercises, num_ratings):
             return list(pool)
         return random.sample(pool, count)
 
-    selected.extend(safe_sample(preferred_pool, preferred_count))
-    selected.extend(safe_sample(secondary_pool, secondary_count))
-    selected.extend(safe_sample(other_pool, other_count))
+    selected = []
+    selected_ids = set()
 
-    # If we still need more, fill from full catalog
-    selected_ids = {ex['exercise_id'] for ex in selected}
+    def add(exercises):
+        for ex in exercises:
+            if ex['exercise_id'] not in selected_ids:
+                selected.append(ex)
+                selected_ids.add(ex['exercise_id'])
+
+    # 1. Popular exercises (ALL users rate these — creates global overlap)
+    add(popular_exercises)
+
+    # 2. Archetype core exercises (same-archetype users share these)
+    for mg in archetype['preferred_muscles']:
+        add(core_by_muscle.get(mg, []))
+    for mg in archetype['secondary_muscles']:
+        core = core_by_muscle.get(mg, [])
+        add(safe_sample(core, min(10, len(core))))
+
+    # 3. Fill remaining with random variety from preferred/secondary/other
     remaining = num_ratings - len(selected)
     if remaining > 0:
+        preferred_pool = []
+        for mg in archetype['preferred_muscles']:
+            preferred_pool.extend([ex for ex in by_muscle.get(mg, []) if ex['exercise_id'] not in selected_ids])
+        secondary_pool = []
+        for mg in archetype['secondary_muscles']:
+            secondary_pool.extend([ex for ex in by_muscle.get(mg, []) if ex['exercise_id'] not in selected_ids])
+        pref_and_sec = set(archetype['preferred_muscles'] + archetype['secondary_muscles'])
+        other_pool = []
+        for mg, exs in by_muscle.items():
+            if mg not in pref_and_sec:
+                other_pool.extend([ex for ex in exs if ex['exercise_id'] not in selected_ids])
+
+        pref_count = int(remaining * 0.5)
+        sec_count = int(remaining * 0.3)
+        other_count = remaining - pref_count - sec_count
+
+        add(safe_sample(preferred_pool, pref_count))
+        add(safe_sample(secondary_pool, sec_count))
+        add(safe_sample(other_pool, other_count))
+
+    # If we still need more, fill from full catalog
+    remaining2 = num_ratings - len(selected)
+    if remaining2 > 0:
         extras = [ex for ex in all_exercises if ex['exercise_id'] not in selected_ids]
-        selected.extend(safe_sample(extras, remaining))
+        add(safe_sample(extras, remaining2))
 
-    # Deduplicate by exercise_id (keep first occurrence)
-    seen = set()
-    unique = []
-    for ex in selected:
-        if ex['exercise_id'] not in seen:
-            seen.add(ex['exercise_id'])
-            unique.append(ex)
-
-    return unique[:num_ratings]
+    return selected[:num_ratings]
 
 
 # ============================================================
@@ -370,6 +398,44 @@ def create_sessions_and_ratings(tracking_conn, user_id, exercises, archetype):
 
 
 # ============================================================
+#  CLEANUP PREVIOUS EVAL DATA
+# ============================================================
+
+def cleanup_previous_eval_data(auth_conn, tracking_conn):
+    """Delete previously generated eval data so we can regenerate cleanly."""
+    # Get eval user IDs
+    auth_cursor = auth_conn.cursor()
+    auth_cursor.execute("SELECT user_id FROM users WHERE username LIKE 'eval_user_%%'")
+    eval_ids = [row[0] for row in auth_cursor.fetchall()]
+    auth_cursor.close()
+
+    if not eval_ids:
+        logger.info("No previous eval data to clean")
+        return
+
+    logger.info(f"Cleaning up {len(eval_ids)} previous eval users and their data...")
+
+    # Delete ratings
+    t_cursor = tracking_conn.cursor()
+    placeholders = ','.join(['%s'] * len(eval_ids))
+    t_cursor.execute(f"DELETE FROM workout_exercise_ratings WHERE user_id IN ({placeholders})", eval_ids)
+    deleted_ratings = t_cursor.rowcount
+    t_cursor.execute(f"DELETE FROM workout_sessions WHERE user_id IN ({placeholders})", eval_ids)
+    deleted_sessions = t_cursor.rowcount
+    tracking_conn.commit()
+    t_cursor.close()
+
+    # Delete users
+    a_cursor = auth_conn.cursor()
+    a_cursor.execute(f"DELETE FROM users WHERE user_id IN ({placeholders})", eval_ids)
+    deleted_users = a_cursor.rowcount
+    auth_conn.commit()
+    a_cursor.close()
+
+    logger.info(f"  Deleted {deleted_ratings} ratings, {deleted_sessions} sessions, {deleted_users} users")
+
+
+# ============================================================
 #  MAIN
 # ============================================================
 
@@ -385,9 +451,18 @@ def main():
     logger.info("Connected to all databases")
 
     try:
+        # Clean previous eval data first
+        cleanup_previous_eval_data(auth_conn, tracking_conn)
+
         # Load exercise catalog
         all_exercises, by_muscle = load_exercises(content_conn)
         content_conn.close()
+
+        # Build shared core exercise sets for CF overlap
+        popular_exercises, core_by_muscle = build_core_exercise_sets(by_muscle, all_exercises)
+        logger.info(f"Popular exercises (all users): {len(popular_exercises)}")
+        for mg, exs in core_by_muscle.items():
+            logger.info(f"  Core {mg}: {len(exs)} exercises")
 
         total_users = 0
         total_ratings = 0
@@ -403,7 +478,8 @@ def main():
             for uid in user_ids:
                 num_ratings = random.randint(*RATINGS_PER_USER)
                 exercises = select_exercises_for_user(
-                    arch_def, by_muscle, all_exercises, num_ratings
+                    arch_def, by_muscle, all_exercises, num_ratings,
+                    popular_exercises, core_by_muscle,
                 )
                 count = create_sessions_and_ratings(tracking_conn, uid, exercises, arch_def)
                 total_ratings += count
