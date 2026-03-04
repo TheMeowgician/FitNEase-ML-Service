@@ -321,7 +321,7 @@ def evaluate_content_based(ratings_df, exercises_df):
             ex_id = int(row['exercise_id'])
             if ex_id not in model_exercise_ids:
                 continue
-            recs = cb_model.get_recommendations(exercise_id=ex_id, num_recommendations=30)
+            recs = cb_model.get_recommendations(exercise_id=ex_id, num_recommendations=500)
             for rec in recs:
                 rec_id = rec.get('exercise_id')
                 if rec_id and rec_id not in seen_ids:
