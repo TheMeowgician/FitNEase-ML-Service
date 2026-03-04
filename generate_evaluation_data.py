@@ -103,8 +103,8 @@ ARCHETYPES = {
     },
 }
 
-USERS_PER_ARCHETYPE = 30  # 8 × 30 = 240 users
-RATINGS_PER_USER = (50, 65)
+USERS_PER_ARCHETYPE = 25  # 8 × 25 = 200 users
+RATINGS_PER_USER = (40, 55)
 
 
 # ============================================================
