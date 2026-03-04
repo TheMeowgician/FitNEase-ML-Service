@@ -511,6 +511,10 @@ def evaluate_hybrid(ratings_df, exercises_df):
     )
     hybrid.set_trained_cf_model({'cf_model': cf_model, 'best_method': 'SVD'})
 
+    # Override weights: content-based is stronger, give it more weight
+    hybrid.CONTENT_WEIGHT = 0.6
+    hybrid.COLLABORATIVE_WEIGHT = 0.4
+
     all_exercise_ids = sorted(exercises_df['exercise_id'].tolist())
     all_eid_set = set(all_exercise_ids)
 
@@ -668,7 +672,7 @@ def print_report(rf, cb, cf, hy):
         print("   [SKIPPED]")
 
     # 4. Hybrid
-    print("\n4. HYBRID RECOMMENDER")
+    print("\n4. HYBRID RECOMMENDER (60% Content + 40% CF)")
     print("-" * 50)
     if hy:
         print(f"   Users evaluated:       {hy['users_evaluated']}")

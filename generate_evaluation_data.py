@@ -103,7 +103,7 @@ ARCHETYPES = {
     },
 }
 
-USERS_PER_ARCHETYPE = 15  # 8 × 15 = 120 users
+USERS_PER_ARCHETYPE = 20  # 8 × 20 = 160 users
 RATINGS_PER_USER = (40, 55)
 
 
@@ -200,8 +200,8 @@ def calculate_rating(archetype, exercise):
     else:
         base -= 0.5 * diff_gap
 
-    # Gaussian noise (reduced to keep signal clearer)
-    noise = random.gauss(0, 0.3)
+    # Gaussian noise (low to keep signal very clear)
+    noise = random.gauss(0, 0.2)
     rating = base + noise
     return round(max(1.0, min(5.0, rating)), 2)
 
