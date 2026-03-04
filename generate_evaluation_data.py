@@ -422,12 +422,24 @@ def main():
             FROM workout_exercise_ratings
         """)
         stats = cursor.fetchone()
-        cursor.execute("""
-            SELECT COUNT(*) FROM workout_exercise_ratings
-            WHERE user_id IN (SELECT user_id FROM fitnease_auth_db.users WHERE username LIKE 'eval_user_%%')
-        """)
-        eval_ratings = cursor.fetchone()[0]
         cursor.close()
+
+        # Count eval user ratings via auth connection
+        auth_cursor = auth_conn.cursor()
+        auth_cursor.execute("SELECT user_id FROM users WHERE username LIKE 'eval_user_%%'")
+        eval_user_ids = [row[0] for row in auth_cursor.fetchall()]
+        auth_cursor.close()
+
+        eval_ratings = 0
+        if eval_user_ids:
+            t_cursor = tracking_conn.cursor()
+            placeholders = ','.join(['%s'] * len(eval_user_ids))
+            t_cursor.execute(
+                f"SELECT COUNT(*) FROM workout_exercise_ratings WHERE user_id IN ({placeholders})",
+                eval_user_ids,
+            )
+            eval_ratings = t_cursor.fetchone()[0]
+            t_cursor.close()
 
         logger.info(f"Total ratings in DB:      {stats[0]}")
         logger.info(f"  - From eval users:      {eval_ratings}")
