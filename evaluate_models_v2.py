@@ -523,6 +523,27 @@ def evaluate_hybrid(ratings_df, exercises_df):
     s_hits10 = 0; s_hits15 = 0; s_ndcg10 = []; s_map10 = []; s_prec10 = []; s_mrr = []
     all_rec = set(); total = 0
 
+    def min_max_normalize(scores):
+        """Normalize list of (id, score) to [0,1] range."""
+        vals = [s for _, s in scores]
+        lo, hi = min(vals), max(vals)
+        if hi - lo < 1e-9:
+            return [(eid, 0.5) for eid, _ in scores]
+        return [(eid, (s - lo) / (hi - lo)) for eid, s in scores]
+
+    def rank_hybrid(candidate_eids, uid, user_context):
+        """Score candidates with both models, normalize independently, then combine."""
+        cf_raw = [(eid, hybrid.calculate_cf_score(uid, eid, user_context)) for eid in candidate_eids]
+        cb_raw = [(eid, hybrid.calculate_content_score(uid, eid, user_context)) for eid in candidate_eids]
+        cf_norm = {eid: s for eid, s in min_max_normalize(cf_raw)}
+        cb_norm = {eid: s for eid, s in min_max_normalize(cb_raw)}
+        combined = []
+        for eid in candidate_eids:
+            score = hybrid.CONTENT_WEIGHT * cb_norm[eid] + hybrid.COLLABORATIVE_WEIGHT * cf_norm[eid]
+            combined.append((eid, score))
+        combined.sort(key=lambda x: x[1], reverse=True)
+        return [eid for eid, _ in combined]
+
     for _, test_row in test_df.iterrows():
         uid = int(test_row['user_id'])
         test_eid = int(test_row['exercise_id'])
@@ -531,12 +552,6 @@ def evaluate_hybrid(ratings_df, exercises_df):
 
         # Pre-compute user context once
         user_context = hybrid.get_user_context(uid)
-
-        def hybrid_score(eid):
-            cf_s = hybrid.calculate_cf_score(uid, eid, user_context)
-            content_s = hybrid.calculate_content_score(uid, eid, user_context)
-            return hybrid.CONTENT_WEIGHT * content_s + hybrid.COLLABORATIVE_WEIGHT * cf_s
-
         total += 1
 
         # --- Full Catalog: score all unseen exercises ---
@@ -544,9 +559,7 @@ def evaluate_hybrid(ratings_df, exercises_df):
         if test_eid not in fc_candidates:
             fc_candidates.append(test_eid)
 
-        fc_scored = [(eid, hybrid_score(eid)) for eid in fc_candidates]
-        fc_scored.sort(key=lambda x: x[1], reverse=True)
-        fc_ranked = [s[0] for s in fc_scored]
+        fc_ranked = rank_hybrid(fc_candidates, uid, user_context)
         all_rec.update(fc_ranked[:15])
 
         if test_eid in fc_ranked[:10]: fc_hits10 += 1
@@ -555,9 +568,7 @@ def evaluate_hybrid(ratings_df, exercises_df):
 
         # --- Sampled (100 candidates) ---
         candidates = sampled_candidates(test_eid, all_exercise_ids, seen, NUM_NEGATIVES, seed=uid)
-        s_scored = [(eid, hybrid_score(eid)) for eid in candidates]
-        s_scored.sort(key=lambda x: x[1], reverse=True)
-        s_ranked = [s[0] for s in s_scored]
+        s_ranked = rank_hybrid(candidates, uid, user_context)
 
         if test_eid in s_ranked[:10]: s_hits10 += 1
         if test_eid in s_ranked[:15]: s_hits15 += 1
