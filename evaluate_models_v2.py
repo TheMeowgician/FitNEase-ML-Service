@@ -380,7 +380,7 @@ def evaluate_content_based(ratings_df, exercises_df):
 #  3. COLLABORATIVE FILTERING (Full Catalog + Sampled)
 # ============================================================
 
-def evaluate_collaborative(ratings_df):
+def evaluate_collaborative(ratings_df, exercises_df):
     logger.info("=" * 60)
     logger.info("EVALUATING COLLABORATIVE FILTERING (SVD)")
     logger.info("=" * 60)
@@ -415,7 +415,7 @@ def evaluate_collaborative(ratings_df):
     cf_model = ProperCollaborativeFiltering(algorithm='SVD', n_factors=30)
     cf_model.fit(ratings_data=cf_train)
 
-    all_exercise_ids = sorted(ratings_df['exercise_id'].unique())
+    all_exercise_ids = sorted(exercises_df['exercise_id'].tolist())
 
     # Accumulators
     rmse_err = []; mae_err = []
@@ -752,7 +752,7 @@ def main():
 
     rf = evaluate_random_forest(ratings_df, exercises_df, users_df)
     cb = evaluate_content_based(ratings_df, exercises_df)
-    cf = evaluate_collaborative(ratings_df)
+    cf = evaluate_collaborative(ratings_df, exercises_df)
     hy = evaluate_hybrid(ratings_df, exercises_df)
 
     print_report(rf, cb, cf, hy)

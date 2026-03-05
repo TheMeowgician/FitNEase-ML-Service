@@ -38,8 +38,6 @@ ARCHETYPES = {
         'fitness_level': 'advanced',
         'age_range': (20, 35),
         'calorie_preference': 'high',
-        'preferred_categories': ['strength', 'plyometrics'],
-        'disliked_categories': ['stretching'],
     },
     'upper_beginner': {
         'preferred_muscles': ['upper_body'],
@@ -50,8 +48,6 @@ ARCHETYPES = {
         'fitness_level': 'beginner',
         'age_range': (18, 40),
         'calorie_preference': 'low',
-        'preferred_categories': ['stretching'],
-        'disliked_categories': ['plyometrics'],
     },
     'lower_advanced': {
         'preferred_muscles': ['lower_body'],
@@ -62,8 +58,6 @@ ARCHETYPES = {
         'fitness_level': 'advanced',
         'age_range': (22, 38),
         'calorie_preference': 'high',
-        'preferred_categories': ['strength', 'plyometrics'],
-        'disliked_categories': ['stretching'],
     },
     'lower_beginner': {
         'preferred_muscles': ['lower_body'],
@@ -74,8 +68,6 @@ ARCHETYPES = {
         'fitness_level': 'beginner',
         'age_range': (18, 54),
         'calorie_preference': 'low',
-        'preferred_categories': ['stretching', 'cardio'],
-        'disliked_categories': ['plyometrics'],
     },
     'core_beginner': {
         'preferred_muscles': ['core'],
@@ -86,8 +78,6 @@ ARCHETYPES = {
         'fitness_level': 'beginner',
         'age_range': (25, 45),
         'calorie_preference': 'low',
-        'preferred_categories': ['stretching'],
-        'disliked_categories': ['plyometrics'],
     },
     'core_intermediate': {
         'preferred_muscles': ['core'],
@@ -98,8 +88,6 @@ ARCHETYPES = {
         'fitness_level': 'intermediate',
         'age_range': (20, 38),
         'calorie_preference': 'medium',
-        'preferred_categories': ['strength', 'cardio'],
-        'disliked_categories': [],
     },
     'balanced_mid': {
         'preferred_muscles': ['upper_body', 'lower_body'],
@@ -110,8 +98,6 @@ ARCHETYPES = {
         'fitness_level': 'intermediate',
         'age_range': (22, 42),
         'calorie_preference': 'medium',
-        'preferred_categories': ['cardio', 'stretching'],
-        'disliked_categories': [],
     },
     'heavy_compound': {
         'preferred_muscles': ['lower_body', 'upper_body'],
@@ -122,8 +108,6 @@ ARCHETYPES = {
         'fitness_level': 'advanced',
         'age_range': (22, 35),
         'calorie_preference': 'high',
-        'preferred_categories': ['strength', 'plyometrics'],
-        'disliked_categories': ['stretching'],
     },
 }
 
@@ -176,8 +160,7 @@ def load_exercises(content_conn):
     cursor = content_conn.cursor(dictionary=True)
     cursor.execute("""
         SELECT exercise_id, exercise_name, target_muscle_group,
-               difficulty_level, equipment_needed, calories_burned_per_minute,
-               exercise_category
+               difficulty_level, equipment_needed, calories_burned_per_minute
         FROM exercises
     """)
     exercises = cursor.fetchall()
@@ -243,15 +226,6 @@ def calculate_rating(archetype, exercise):
             base += 0.2
         elif cal >= 9 or cal <= 2:
             base -= 0.15
-
-    # Exercise category preference: strong signal for more distinct patterns
-    cat = exercise.get('exercise_category') or 'strength'
-    preferred_cats = archetype.get('preferred_categories', [])
-    disliked_cats = archetype.get('disliked_categories', [])
-    if cat in preferred_cats:
-        base += 0.6
-    elif cat in disliked_cats:
-        base -= 0.5
 
     # Gaussian noise (low for clear patterns)
     noise = random.gauss(0, 0.12)
