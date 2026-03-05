@@ -81,7 +81,8 @@ def load_data(tracking_conn, content_conn, auth_conn):
 
     exercises_df = pd.read_sql("""
         SELECT exercise_id, exercise_name, target_muscle_group, difficulty_level,
-               equipment_needed, calories_burned_per_minute
+               equipment_needed, default_duration_seconds, calories_burned_per_minute,
+               instructions
         FROM exercises
     """, content_conn)
 
