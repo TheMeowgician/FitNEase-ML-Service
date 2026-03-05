@@ -880,6 +880,26 @@ def main():
 
     print_report(rf, cb, cf, hy)
 
+    # Save results to file
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'evaluation_output')
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, 'evaluation_results.txt')
+
+    import io
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buf
+    print_report(rf, cb, cf, hy)
+    sys.stdout = old_stdout
+    report_text = buf.getvalue()
+
+    from datetime import datetime
+    with open(output_file, 'w') as f:
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(report_text)
+
+    logger.info(f"Results saved to: {output_file}")
+
 
 if __name__ == '__main__':
     main()
