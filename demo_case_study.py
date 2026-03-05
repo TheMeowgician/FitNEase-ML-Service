@@ -164,7 +164,7 @@ def get_hybrid_recommendations(user_id, ratings_df, exercises_df):
     hybrid.set_trained_cf_model({'cf_model': cf_model, 'best_method': 'SVD'})
 
     # Get recommendations
-    recs = hybrid.get_hybrid_recommendations(user_id, num_recommendations=10)
+    recs = hybrid.get_hybrid_recommendations(user_id, num_recs=10)
     return recs
 
 
@@ -268,7 +268,7 @@ def run_case_study(out):
 
         # Get recommendations
         logger.info(f"Getting recommendations for user {user_id} ({archetype})...")
-        recs = hybrid.get_hybrid_recommendations(user_id, num_recommendations=10)
+        recs = hybrid.get_hybrid_recommendations(user_id, num_recs=10)
 
         w(f"\n  TOP 10 HYBRID RECOMMENDATIONS:")
         w(f"  {'#':<4s} {'Exercise':<45s} {'Muscle':<15s} {'Diff':<6s} {'Score':<8s}")
