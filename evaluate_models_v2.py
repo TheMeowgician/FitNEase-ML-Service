@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 NUM_NEGATIVES = 49  # 49 negatives + 1 positive = 50 candidates
 
+# Multi-candidate evaluation: test at these pool sizes
+CANDIDATE_COUNTS = [20, 30, 50, 100]
+MAX_NEGATIVES = max(c - 1 for c in CANDIDATE_COUNTS)  # 99 negatives for 100 candidates
+
 
 # ============================================================
 #  DATABASE CONNECTIONS
@@ -127,10 +131,19 @@ def average_precision(ranked_list, relevant_items, k):
 
 
 def sampled_candidates(test_exercise_id, all_exercise_ids, seen_ids, num_neg, seed):
-    """Sample 99 random negatives + 1 positive = 20 candidates."""
+    """Sample num_neg random negatives + 1 positive."""
     rng = random.Random(seed)
     pool = [eid for eid in all_exercise_ids if eid not in seen_ids and eid != test_exercise_id]
     negatives = rng.sample(pool, min(num_neg, len(pool)))
+    return [test_exercise_id] + negatives
+
+
+def sampled_candidates_multi(test_exercise_id, all_exercise_ids, seen_ids, seed):
+    """Sample MAX_NEGATIVES random negatives + 1 positive.
+    Returns full list; callers slice to desired candidate count."""
+    rng = random.Random(seed)
+    pool = [eid for eid in all_exercise_ids if eid not in seen_ids and eid != test_exercise_id]
+    negatives = rng.sample(pool, min(MAX_NEGATIVES, len(pool)))
     return [test_exercise_id] + negatives
 
 
@@ -289,8 +302,10 @@ def evaluate_content_based(ratings_df, exercises_df):
 
     # Accumulators: full catalog
     fc_hits10 = 0; fc_hits15 = 0; fc_ndcg10 = []; fc_ndcg15 = []
-    # Accumulators: sampled
+    # Accumulators: sampled (50 candidates — primary)
     s_hits10 = 0; s_hits15 = 0; s_ndcg10 = []; s_ndcg15 = []; s_mrr = []; s_prec10 = []
+    # Multi-candidate accumulators
+    multi = {c: {'hits10': 0, 'ndcg10': [], 'mrr': []} for c in CANDIDATE_COUNTS}
     total = 0; all_rec = set()
 
     for user_id in eligible_users:
@@ -344,7 +359,7 @@ def evaluate_content_based(ratings_df, exercises_df):
         fc_ndcg10.append(ndcg_at_k(ranked_fc, relevant, 10))
         fc_ndcg15.append(ndcg_at_k(ranked_fc, relevant, 15))
 
-        # --- Sampled (50 candidates) ---
+        # --- Sampled (50 candidates — primary) ---
         candidates = sampled_candidates(test_eid, all_exercise_ids, seen_ids, NUM_NEGATIVES, seed=user_id)
         scored = sorted(candidates, key=lambda eid: candidate_scores.get(eid, 0.0), reverse=True)
 
@@ -359,13 +374,27 @@ def evaluate_content_based(ratings_df, exercises_df):
         except ValueError:
             s_mrr.append(0.0)
 
+        # --- Multi-candidate evaluation ---
+        all_cands = sampled_candidates_multi(test_eid, all_exercise_ids, seen_ids, seed=user_id)
+        for c in CANDIDATE_COUNTS:
+            cands_c = all_cands[:c]  # first item is always test_eid
+            scored_c = sorted(cands_c, key=lambda eid: candidate_scores.get(eid, 0.0), reverse=True)
+            if test_eid in scored_c[:10]:
+                multi[c]['hits10'] += 1
+            multi[c]['ndcg10'].append(ndcg_at_k(scored_c, relevant, 10))
+            try:
+                multi[c]['mrr'].append(1.0 / (scored_c.index(test_eid) + 1))
+            except ValueError:
+                multi[c]['mrr'].append(0.0)
+
     if total == 0:
         return None
 
     coverage = len(all_rec) / len(all_exercise_ids) if all_exercise_ids else 0
 
     logger.info(f"CB Full-Catalog HR@10: {fc_hits10/total:.4f}, Sampled HR@10: {s_hits10/total:.4f}")
-    return {
+
+    result = {
         'users_evaluated': total,
         'fc_hit_rate_10': fc_hits10 / total, 'fc_hit_rate_15': fc_hits15 / total,
         'fc_ndcg_10': np.mean(fc_ndcg10), 'fc_ndcg_15': np.mean(fc_ndcg15),
@@ -374,6 +403,15 @@ def evaluate_content_based(ratings_df, exercises_df):
         's_precision_10': np.mean(s_prec10), 's_mrr': np.mean(s_mrr),
         'coverage': coverage,
     }
+    # Add multi-candidate results
+    result['multi'] = {}
+    for c in CANDIDATE_COUNTS:
+        result['multi'][c] = {
+            'hr10': multi[c]['hits10'] / total,
+            'ndcg10': np.mean(multi[c]['ndcg10']),
+            'mrr': np.mean(multi[c]['mrr']),
+        }
+    return result
 
 
 # ============================================================
@@ -421,6 +459,8 @@ def evaluate_collaborative(ratings_df, exercises_df):
     rmse_err = []; mae_err = []
     fc_hits10 = 0; fc_ndcg10 = []; fc_mrr = []
     s_hits10 = 0; s_ndcg10 = []; s_mrr = []; s_prec10 = []
+    # Multi-candidate accumulators
+    multi = {c: {'hits10': 0, 'ndcg10': [], 'mrr': []} for c in CANDIDATE_COUNTS}
     total = 0
 
     for _, test_row in test_df.iterrows():
@@ -452,7 +492,7 @@ def evaluate_collaborative(ratings_df, exercises_df):
         except ValueError:
             fc_mrr.append(0.0)
 
-        # --- Sampled (50 candidates) ---
+        # --- Sampled (50 candidates — primary) ---
         candidates = sampled_candidates(test_eid, all_exercise_ids, seen, NUM_NEGATIVES, seed=uid)
         s_scored = [(eid, cf_model.predict(uid, eid)) for eid in candidates]
         s_scored.sort(key=lambda x: x[1], reverse=True)
@@ -466,17 +506,40 @@ def evaluate_collaborative(ratings_df, exercises_df):
         except ValueError:
             s_mrr.append(0.0)
 
+        # --- Multi-candidate evaluation ---
+        all_cands = sampled_candidates_multi(test_eid, all_exercise_ids, seen, seed=uid)
+        for c in CANDIDATE_COUNTS:
+            cands_c = all_cands[:c]
+            sc_c = [(eid, cf_model.predict(uid, eid)) for eid in cands_c]
+            sc_c.sort(key=lambda x: x[1], reverse=True)
+            ranked_c = [s[0] for s in sc_c]
+            if test_eid in ranked_c[:10]:
+                multi[c]['hits10'] += 1
+            multi[c]['ndcg10'].append(ndcg_at_k(ranked_c, relevant, 10))
+            try:
+                multi[c]['mrr'].append(1.0 / (ranked_c.index(test_eid) + 1))
+            except ValueError:
+                multi[c]['mrr'].append(0.0)
+
     if total == 0:
         return None
 
     logger.info(f"CF Full HR@10: {fc_hits10/total:.4f}, Sampled HR@10: {s_hits10/total:.4f}")
-    return {
+    result = {
         'users_evaluated': total,
         'rmse': np.sqrt(np.mean(rmse_err)), 'mae': np.mean(mae_err),
         'fc_hit_rate_10': fc_hits10 / total, 'fc_ndcg_10': np.mean(fc_ndcg10), 'fc_mrr': np.mean(fc_mrr),
         's_hit_rate_10': s_hits10 / total, 's_ndcg_10': np.mean(s_ndcg10),
         's_mrr': np.mean(s_mrr), 's_precision_10': np.mean(s_prec10),
     }
+    result['multi'] = {}
+    for c in CANDIDATE_COUNTS:
+        result['multi'][c] = {
+            'hr10': multi[c]['hits10'] / total,
+            'ndcg10': np.mean(multi[c]['ndcg10']),
+            'mrr': np.mean(multi[c]['mrr']),
+        }
+    return result
 
 
 # ============================================================
@@ -537,6 +600,8 @@ def evaluate_hybrid(ratings_df, exercises_df):
     # Accumulators
     fc_hits10 = 0; fc_hits15 = 0; fc_ndcg10 = []
     s_hits10 = 0; s_hits15 = 0; s_ndcg10 = []; s_map10 = []; s_prec10 = []; s_mrr = []
+    # Multi-candidate accumulators
+    multi = {c: {'hits10': 0, 'ndcg10': [], 'mrr': []} for c in CANDIDATE_COUNTS}
     all_rec = set(); total = 0
 
     def min_max_normalize(scores):
@@ -582,7 +647,7 @@ def evaluate_hybrid(ratings_df, exercises_df):
         if test_eid in fc_ranked[:15]: fc_hits15 += 1
         fc_ndcg10.append(ndcg_at_k(fc_ranked, relevant, 10))
 
-        # --- Sampled (50 candidates) ---
+        # --- Sampled (50 candidates — primary) ---
         candidates = sampled_candidates(test_eid, all_exercise_ids, seen, NUM_NEGATIVES, seed=uid)
         s_ranked = rank_hybrid(candidates, uid, user_context)
 
@@ -595,6 +660,19 @@ def evaluate_hybrid(ratings_df, exercises_df):
             s_mrr.append(1.0 / (s_ranked.index(test_eid) + 1))
         except ValueError:
             s_mrr.append(0.0)
+
+        # --- Multi-candidate evaluation ---
+        all_cands = sampled_candidates_multi(test_eid, all_exercise_ids, seen, seed=uid)
+        for c in CANDIDATE_COUNTS:
+            cands_c = all_cands[:c]
+            ranked_c = rank_hybrid(cands_c, uid, user_context)
+            if test_eid in ranked_c[:10]:
+                multi[c]['hits10'] += 1
+            multi[c]['ndcg10'].append(ndcg_at_k(ranked_c, relevant, 10))
+            try:
+                multi[c]['mrr'].append(1.0 / (ranked_c.index(test_eid) + 1))
+            except ValueError:
+                multi[c]['mrr'].append(0.0)
 
     if total == 0:
         return None
@@ -612,7 +690,7 @@ def evaluate_hybrid(ratings_df, exercises_df):
             diversity = min((um + ud + ue) / (3 * max(len(rec_ex), 1)), 1.0)
 
     logger.info(f"Hybrid Full HR@10: {fc_hits10/total:.4f}, Sampled HR@10: {s_hits10/total:.4f}")
-    return {
+    result = {
         'users_evaluated': total,
         'fc_hit_rate_10': fc_hits10 / total, 'fc_hit_rate_15': fc_hits15 / total,
         'fc_ndcg_10': np.mean(fc_ndcg10),
@@ -621,6 +699,14 @@ def evaluate_hybrid(ratings_df, exercises_df):
         's_precision_10': np.mean(s_prec10), 's_mrr': np.mean(s_mrr),
         'coverage': coverage, 'diversity': diversity,
     }
+    result['multi'] = {}
+    for c in CANDIDATE_COUNTS:
+        result['multi'][c] = {
+            'hr10': multi[c]['hits10'] / total,
+            'ndcg10': np.mean(multi[c]['ndcg10']),
+            'mrr': np.mean(multi[c]['mrr']),
+        }
+    return result
 
 
 # ============================================================
@@ -719,9 +805,46 @@ def print_report(rf, cb, cf, hy):
     else:
         print("   [SKIPPED]")
 
+    # 5. Multi-candidate comparison table
+    print("\n5. MULTI-CANDIDATE COMPARISON (Sampled HR@10)")
+    print("-" * 60)
+    if cb and cf and hy and 'multi' in cb and 'multi' in cf and 'multi' in hy:
+        header = f"   {'Candidates':>12s} | {'RF':>8s} | {'CB':>8s} | {'CF':>8s} | {'Hybrid':>8s}"
+        print(header)
+        print("   " + "-" * 52)
+        for c in CANDIDATE_COUNTS:
+            rf_str = f"{rf['accuracy']*100:.1f}%" if rf else "N/A"
+            cb_hr = cb['multi'][c]['hr10'] * 100
+            cf_hr = cf['multi'][c]['hr10'] * 100
+            hy_hr = hy['multi'][c]['hr10'] * 100
+            print(f"   {c:>12d} | {rf_str:>8s} | {cb_hr:>7.1f}% | {cf_hr:>7.1f}% | {hy_hr:>7.1f}%")
+
+        print(f"\n   NDCG@10 by candidate count:")
+        header2 = f"   {'Candidates':>12s} | {'CB':>8s} | {'CF':>8s} | {'Hybrid':>8s}"
+        print(header2)
+        print("   " + "-" * 43)
+        for c in CANDIDATE_COUNTS:
+            cb_n = cb['multi'][c]['ndcg10']
+            cf_n = cf['multi'][c]['ndcg10']
+            hy_n = hy['multi'][c]['ndcg10']
+            print(f"   {c:>12d} | {cb_n:>8.4f} | {cf_n:>8.4f} | {hy_n:>8.4f}")
+
+        print(f"\n   MRR by candidate count:")
+        header3 = f"   {'Candidates':>12s} | {'CB':>8s} | {'CF':>8s} | {'Hybrid':>8s}"
+        print(header3)
+        print("   " + "-" * 43)
+        for c in CANDIDATE_COUNTS:
+            cb_m = cb['multi'][c]['mrr']
+            cf_m = cf['multi'][c]['mrr']
+            hy_m = hy['multi'][c]['mrr']
+            print(f"   {c:>12d} | {cb_m:>8.4f} | {cf_m:>8.4f} | {hy_m:>8.4f}")
+    else:
+        print("   [Not available — requires CB, CF, and Hybrid results]")
+
     print("\n" + "=" * 60)
     print("  All metrics computed from real data with train/test splits.")
     print("  Sampled metrics use 50 candidates (He et al. 2017).")
+    print("  Multi-candidate table uses consistent negative sampling.")
     print("=" * 60)
     print()
 
