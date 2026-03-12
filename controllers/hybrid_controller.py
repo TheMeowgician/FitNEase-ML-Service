@@ -84,6 +84,110 @@ class HybridController:
             # Excellent data - equal weight (Netflix-style)
             return (0.5, 0.5, "very-high")
 
+    def _extract_behavioral_features(self, user_history, user_ratings) -> Dict:
+        """
+        Extract meaningful behavioral features from user workout history and ratings.
+        These features make RF predictions based on actual user behavior rather than
+        just static profile attributes.
+        """
+        features = {}
+
+        try:
+            # Process workout history
+            if user_history and isinstance(user_history, list) and len(user_history) > 0:
+                total_sessions = len(user_history)
+
+                # Completion rate (sessions marked completed / total sessions)
+                completed = sum(1 for s in user_history if s.get('completed', False))
+                features['completion_rate'] = completed / total_sessions if total_sessions > 0 else 0.7
+
+                # Average completion percentage
+                percentages = [s.get('completion_percentage', s.get('completionPercentage', 100)) for s in user_history]
+                features['avg_completion_percentage'] = sum(percentages) / len(percentages) if percentages else 80.0
+
+                # Session abandonment rate (started but < 25% completed)
+                abandoned = sum(1 for p in percentages if p < 25)
+                features['session_abandonment_rate'] = abandoned / total_sessions if total_sessions > 0 else 0.0
+
+                # Days since last workout
+                try:
+                    from datetime import datetime
+                    dates = []
+                    for s in user_history:
+                        date_str = s.get('created_at') or s.get('date') or s.get('start_time')
+                        if date_str:
+                            if isinstance(date_str, str):
+                                # Try multiple date formats
+                                for fmt in ('%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+                                    try:
+                                        dates.append(datetime.strptime(date_str[:26], fmt))
+                                        break
+                                    except ValueError:
+                                        continue
+                    if dates:
+                        latest = max(dates)
+                        days_since = (datetime.now() - latest).days
+                        features['days_since_last_workout'] = max(0, days_since)
+                except Exception:
+                    pass
+
+                # Weekly workout frequency (sessions in last 14 days / 2)
+                try:
+                    from datetime import datetime, timedelta
+                    two_weeks_ago = datetime.now() - timedelta(days=14)
+                    recent_count = 0
+                    for s in user_history:
+                        date_str = s.get('created_at') or s.get('date') or s.get('start_time')
+                        if date_str and isinstance(date_str, str):
+                            for fmt in ('%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+                                try:
+                                    dt = datetime.strptime(date_str[:26], fmt)
+                                    if dt >= two_weeks_ago:
+                                        recent_count += 1
+                                    break
+                                except ValueError:
+                                    continue
+                    features['weekly_workout_frequency'] = max(1, round(recent_count / 2))
+                except Exception:
+                    pass
+
+                # Fatigue estimation based on recent workout density
+                # If >5 workouts in last 7 days, likely higher fatigue
+                try:
+                    from datetime import datetime, timedelta
+                    one_week_ago = datetime.now() - timedelta(days=7)
+                    week_count = 0
+                    for s in user_history:
+                        date_str = s.get('created_at') or s.get('date') or s.get('start_time')
+                        if date_str and isinstance(date_str, str):
+                            for fmt in ('%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+                                try:
+                                    dt = datetime.strptime(date_str[:26], fmt)
+                                    if dt >= one_week_ago:
+                                        week_count += 1
+                                    break
+                                except ValueError:
+                                    continue
+                    if week_count >= 6:
+                        features['fatigue_level'] = 3  # High
+                    elif week_count >= 4:
+                        features['fatigue_level'] = 2  # Medium
+                    else:
+                        features['fatigue_level'] = 1  # Low
+                except Exception:
+                    pass
+
+            # Process ratings
+            if user_ratings and isinstance(user_ratings, list) and len(user_ratings) > 0:
+                ratings = [r.get('rating', 3) for r in user_ratings if r.get('rating')]
+                if ratings:
+                    features['avg_rating'] = sum(ratings) / len(ratings)
+
+        except Exception as e:
+            logger.warning(f"Error extracting behavioral features: {e}")
+
+        return features
+
     def _filter_by_fitness_level(self, recommendations: List[Dict], user_fitness_level: str,
                                   rf_predictor=None, num_recommendations: int = 10, user_profile: Dict = None) -> List[Dict]:
         """
@@ -316,15 +420,21 @@ class HybridController:
             # Filter recommendations by user's fitness level
             logger.info(f"Got {len(raw_recommendations)} raw recommendations, filtering by fitness level...")
 
-            # Prepare user profile for Random Forest prediction
+            # Prepare user profile for Random Forest prediction with behavioral data
+            behavioral = self._extract_behavioral_features(user_history, user_ratings)
             rf_user_profile = {
                 'fitness_level': user_fitness_level,
                 'age': user_data.get('age', 30),
                 'bmi': user_data.get('bmi', 23.0),
                 'experience_months': user_data.get('workout_experience_years', 1) * 12,
-                'weekly_workout_frequency': user_data.get('active_days', 3),
-                'days_since_last_workout': 2,  # Default assumption
-                'fatigue_level': 1  # Default low fatigue
+                'weekly_workout_frequency': behavioral.get('weekly_workout_frequency', user_data.get('active_days', 3)),
+                'days_since_last_workout': behavioral.get('days_since_last_workout', 2),
+                'fatigue_level': behavioral.get('fatigue_level', 1),
+                # Behavioral features that make RF predictions meaningful
+                'completion_rate': behavioral.get('completion_rate', 0.7),
+                'avg_rating': behavioral.get('avg_rating', 3.0),
+                'session_abandonment_rate': behavioral.get('session_abandonment_rate', 0.0),
+                'avg_completion_percentage': behavioral.get('avg_completion_percentage', 80.0),
             }
 
             # Filter recommendations - request total_needed to have enough for primary + alternatives

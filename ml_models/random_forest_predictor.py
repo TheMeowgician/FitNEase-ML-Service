@@ -116,6 +116,22 @@ class RandomForestPredictor:
             # If model is very confident, use full score; if unsure, move toward 0.5
             appropriateness = appropriateness * confidence + 0.5 * (1 - confidence)
 
+            # Behavioral adjustment: factor in user's actual completion patterns
+            # Users with high abandonment rates benefit from easier exercises
+            completion_rate = user_profile.get('completion_rate', 0.7)
+            avg_completion_pct = user_profile.get('avg_completion_percentage', 80.0)
+            fatigue_level = user_profile.get('fatigue_level', 1)
+
+            if completion_rate < 0.5 and predicted_class == 3:
+                # User often doesn't finish, and exercise is hard → penalize
+                appropriateness *= 0.8
+            elif fatigue_level >= 3 and predicted_class == 3:
+                # High fatigue + hard exercise → penalize
+                appropriateness *= 0.85
+            elif completion_rate > 0.8 and predicted_class == 1:
+                # Consistent user getting easy exercises → slight boost to challenge them
+                appropriateness *= 0.9  # Slightly reduce easy exercise priority
+
             # Determine difficulty rating
             if appropriateness >= 0.8:
                 difficulty_rating = 'perfect_match'
@@ -221,10 +237,12 @@ class RandomForestPredictor:
             features_dict = {}
 
             # User features (matching trained model feature names)
+            # Static profile features
             features_dict['age'] = user_profile.get('age', 30)
             features_dict['fitness_level_numeric'] = self._encode_fitness_level(user_profile.get('fitness_level', 'intermediate'))
             features_dict['bmi_category_numeric'] = self._encode_bmi_category(user_profile.get('bmi', 23.0))
             features_dict['user_experience'] = user_profile.get('experience_months', 12)
+            # Behavioral features (from actual workout history)
             features_dict['user_consistency'] = user_profile.get('weekly_workout_frequency', 3)
             features_dict['days_since_last_workout'] = user_profile.get('days_since_last_workout', 2)
 

@@ -54,6 +54,7 @@ class WeeklyPlanController:
             session_count = data.get('session_count')       # int or None
             exercises_per_day = data.get('exercises_per_day')  # int or None
             week_seed = data.get('week_seed')               # int or None — overrides default ISO-week seed
+            exclude_exercise_ids = data.get('exclude_exercise_ids', [])  # Prevent repetition across weeks
 
             logger.info(f"[WEEKLY_PLAN_CTRL] Generating plan for user {user_id}")
             logger.info(f"[WEEKLY_PLAN_CTRL] Days: {workout_days}, Level: {fitness_level}")
@@ -61,6 +62,8 @@ class WeeklyPlanController:
                 logger.info(f"[WEEKLY_PLAN_CTRL] PHP-provided session_count={session_count}, exercises_per_day={exercises_per_day}")
             if week_seed is not None:
                 logger.info(f"[WEEKLY_PLAN_CTRL] Custom week_seed={week_seed} (force_fresh regeneration)")
+            if exclude_exercise_ids:
+                logger.info(f"[WEEKLY_PLAN_CTRL] Excluding {len(exclude_exercise_ids)} recently completed exercises")
 
             # Initialize generator with model manager
             if self.generator is None:
@@ -78,6 +81,7 @@ class WeeklyPlanController:
                 session_count=session_count,
                 exercises_per_day=exercises_per_day,
                 week_seed=week_seed,
+                exclude_exercise_ids=exclude_exercise_ids,
             )
 
             logger.info(f"[WEEKLY_PLAN_CTRL] Plan generated successfully")

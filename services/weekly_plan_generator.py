@@ -42,6 +42,7 @@ class WeeklyPlanGenerator:
         week_seed: Optional[int] = None,
         session_count: Optional[int] = None,
         exercises_per_day: Optional[int] = None,
+        exclude_exercise_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         Generate weekly workout plan for a user
@@ -87,13 +88,33 @@ class WeeklyPlanGenerator:
                 logger.info(f"[WEEKLY_PLAN] Using PHP-provided exercises_per_day: {exercises_per_day}")
 
             # Get exercise recommendations from ML model
+            # Request extra exercises to compensate for exclusion filtering
+            exclude_ids_set = set(exclude_exercise_ids or [])
+            buffer_multiplier = 2 if exclude_ids_set else 1
             all_exercises = self._get_exercise_recommendations(
                 user_id, fitness_level, target_muscle_groups, goals,
-                len(workout_days) * exercises_per_day, week_seed
+                len(workout_days) * exercises_per_day * buffer_multiplier, week_seed
             )
 
             if not all_exercises:
                 raise ValueError("No exercises available for recommendations")
+
+            # Filter out recently completed exercises to prevent repetition across weeks
+            # Coerce IDs to int for safe comparison (PHP/tracking may send strings)
+            exclude_ids_set = {int(x) for x in exclude_ids_set} if exclude_ids_set else set()
+            if exclude_ids_set:
+                before_count = len(all_exercises)
+                filtered = [ex for ex in all_exercises if int(ex.get('exercise_id', 0)) not in exclude_ids_set]
+                excluded_count = before_count - len(filtered)
+                logger.info(f"[WEEKLY_PLAN] Excluded {excluded_count} recently completed exercises ({before_count} -> {len(filtered)})")
+
+                # Only use filtered list if enough exercises remain; otherwise fall back to full list
+                # This prevents empty plans when the exercise pool is very small
+                needed = len(workout_days) * exercises_per_day
+                if len(filtered) >= needed:
+                    all_exercises = filtered
+                else:
+                    logger.warning(f"[WEEKLY_PLAN] Not enough exercises after exclusion ({len(filtered)} < {needed}), using full list")
 
             # Group exercises by muscle group for balanced distribution
             grouped_exercises = self._group_exercises_by_muscle_group(all_exercises)
