@@ -423,6 +423,30 @@ class HybridController:
             # Filter recommendations by user's fitness level
             logger.info(f"Got {len(raw_recommendations)} raw recommendations, filtering by fitness level...")
 
+            # For intermediate users: the raw pool may not contain level 3 exercises
+            # because the content model ranks level 2 higher. Inject level 3 exercises
+            # from the full candidate pool to ensure progressive difficulty mixing works.
+            if user_fitness_level.lower() == 'intermediate':
+                raw_diff_3 = [r for r in raw_recommendations if r.get('difficulty_level') == 3]
+                if len(raw_diff_3) < 5 and exercises:
+                    # Get all level 3 exercise IDs
+                    level_3_ids = {e.get('exercise_id', e.get('id')) for e in exercises if e.get('difficulty_level') == 3}
+                    # Find level 3 exercises already in raw pool
+                    existing_ids = {r.get('exercise_id') for r in raw_recommendations}
+                    # Get scored level 3 exercises that aren't in the pool yet
+                    # Re-request with larger buffer to capture level 3 exercises
+                    extended = hybrid_model.get_recommendations(
+                        user_id=user_id,
+                        user_preferences={'fitness_level': user_fitness_level},
+                        num_recommendations=200,
+                        content_weight=content_weight,
+                        collaborative_weight=collaborative_weight
+                    )
+                    extra_level_3 = [r for r in extended if r.get('difficulty_level') == 3 and r.get('exercise_id') not in existing_ids]
+                    if extra_level_3:
+                        raw_recommendations.extend(extra_level_3[:10])
+                        logger.info(f"Injected {min(len(extra_level_3), 10)} level-3 exercises into candidate pool for progressive mixing")
+
             # Calculate dynamic progression slots for intermediate users
             # This determines how many "next level" exercises to include
             progression_slots = 2  # Default minimum for progression exposure
