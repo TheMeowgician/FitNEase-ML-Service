@@ -189,17 +189,18 @@ class HybridController:
         return features
 
     def _filter_by_fitness_level(self, recommendations: List[Dict], user_fitness_level: str,
-                                  rf_predictor=None, num_recommendations: int = 10, user_profile: Dict = None) -> List[Dict]:
+                                  rf_predictor=None, num_recommendations: int = 10, user_profile: Dict = None,
+                                  progression_slots: int = 2) -> List[Dict]:
         """
         Filter and rank recommendations by user's fitness level using Random Forest ML model.
 
         Two-stage process:
-        1. Rule-based filtering by difficulty level (safety filter)
+        1. Rule-based filtering by difficulty level (safety filter + progressive difficulty mixing)
         2. ML-based ranking using Random Forest appropriateness scores
 
         Fitness level mapping:
         - beginner: difficulty_level = 1
-        - intermediate: difficulty_level = 2
+        - intermediate: difficulty_level = 2 (with dynamic progression slots for level 3)
         - advanced/expert: difficulty_level = 3
         """
         # Map fitness level to difficulty
@@ -231,21 +232,23 @@ class HybridController:
             if len(filtered_recommendations) < num_recommendations:
                 logger.warning(f"Only found {len(filtered_recommendations)} beginner exercises out of {num_recommendations} requested!")
                 logger.warning(f"This indicates the content-based model is not prioritizing beginner exercises.")
+        elif target_difficulty == 2:
+            # INTERMEDIATE: Progressive difficulty mixing
+            # Reserve progression_slots for level 3 exercises to enable gradual difficulty increase
+            next_level = [r for r in recommendations if r.get('difficulty_level') == 3]
+            actual_progression = min(progression_slots, len(next_level), num_recommendations)
+            main_slots = num_recommendations - actual_progression
+            filtered_recommendations = exact_match[:main_slots] + next_level[:actual_progression]
+            logger.info(f"Intermediate progressive mix: {min(main_slots, len(exact_match))} level-2 + {actual_progression} level-3 (progression_slots={progression_slots})")
         else:
-            # For intermediate/advanced users, allow flexible ±1 difficulty matching
+            # For advanced users, allow one level down too
             if len(exact_match) >= num_recommendations:
                 filtered_recommendations = exact_match
                 logger.info(f"Found {len(exact_match)} exact difficulty matches")
             else:
-                # Allow one level up for variety (but not easier)
-                if target_difficulty < 3:
-                    filtered_recommendations = [r for r in recommendations
-                                    if r.get('difficulty_level') in [target_difficulty, target_difficulty + 1]]
-                else:
-                    # For advanced users, allow one level down too
-                    filtered_recommendations = [r for r in recommendations
-                                    if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
-                logger.info(f"Found {len(filtered_recommendations)} difficulty matches (exact + ±1 level)")
+                filtered_recommendations = [r for r in recommendations
+                                if r.get('difficulty_level') in [target_difficulty - 1, target_difficulty]]
+                logger.info(f"Found {len(filtered_recommendations)} difficulty matches (exact + -1 level)")
 
         # DEBUG: Log what's being returned
         filtered_difficulty_counts = {}
@@ -420,6 +423,30 @@ class HybridController:
             # Filter recommendations by user's fitness level
             logger.info(f"Got {len(raw_recommendations)} raw recommendations, filtering by fitness level...")
 
+            # Calculate dynamic progression slots for intermediate users
+            # This determines how many "next level" exercises to include
+            progression_slots = 2  # Default minimum for progression exposure
+            if user_fitness_level.lower() == 'intermediate' and user_ratings and exercises:
+                try:
+                    exercise_diff_map = {e.get('exercise_id', e.get('id')): e.get('difficulty_level', 0) for e in exercises}
+                    next_level_ratings = [
+                        rating for eid, rating in user_ratings.items()
+                        if exercise_diff_map.get(int(eid)) == 3
+                    ]
+                    if next_level_ratings:
+                        avg_next = sum(next_level_ratings) / len(next_level_ratings)
+                        if avg_next >= 4.5:
+                            progression_slots = 5
+                        elif avg_next >= 4.0:
+                            progression_slots = 4
+                        elif avg_next >= 3.5:
+                            progression_slots = 3
+                        logger.info(f"User {user_id} rated {len(next_level_ratings)} level-3 exercises (avg {avg_next:.1f}) -> {progression_slots} progression slots")
+                    else:
+                        logger.info(f"User {user_id} has no level-3 ratings yet -> {progression_slots} default progression slots")
+                except Exception as e:
+                    logger.warning(f"Error computing progression slots: {e}, using default {progression_slots}")
+
             # Prepare user profile for Random Forest prediction with behavioral data
             behavioral = self._extract_behavioral_features(user_history, user_ratings)
             rf_user_profile = {
@@ -443,7 +470,8 @@ class HybridController:
                 user_fitness_level,
                 rf_predictor,
                 total_needed,  # Request enough for both primary and alternatives
-                rf_user_profile
+                rf_user_profile,
+                progression_slots=progression_slots
             )
             logger.info(f"After filtering: {len(all_filtered_recommendations)} recommendations matching fitness level '{user_fitness_level}'")
 
