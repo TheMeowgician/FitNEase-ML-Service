@@ -411,7 +411,7 @@ class HybridController:
             buffer_multiplier = 10 if user_rating_count < 5 else 5
             raw_recommendations = hybrid_model.get_recommendations(
                 user_id=user_id,
-                user_preferences=user_data.get('preferences') if user_data else None,
+                user_preferences={'fitness_level': user_fitness_level},
                 num_recommendations=total_needed * buffer_multiplier,
                 content_weight=content_weight,
                 collaborative_weight=collaborative_weight
