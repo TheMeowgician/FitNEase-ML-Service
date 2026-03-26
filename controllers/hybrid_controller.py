@@ -336,9 +336,12 @@ class HybridController:
             auth_token = data.get('auth_token') if data else None
 
             # Check cache first — skip all HTTP calls + inference if we have a recent result
-            cached = _get_cached(user_id)
-            if cached:
-                return cached
+            # Skip cache when manual weights are provided (console testing)
+            has_manual_weights = data and 'content_weight' in data and 'collaborative_weight' in data
+            if not has_manual_weights:
+                cached = _get_cached(user_id)
+                if cached:
+                    return cached
 
             # NEW: Parse customization parameters
             include_alternatives = data.get('include_alternatives', False) if data else False
