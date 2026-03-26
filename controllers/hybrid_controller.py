@@ -423,6 +423,16 @@ class HybridController:
                 collaborative_weight=collaborative_weight
             )
 
+            # If manual weights were provided, recalculate hybrid scores and re-sort
+            # This avoids modifying the core ML model (custom_classes.py) — mobile app stays untouched
+            if has_manual_weights and raw_recommendations:
+                for rec in raw_recommendations:
+                    cb_score = rec.get('content_score', 0) or 0
+                    cf_score = rec.get('collaborative_score', 0) or 0
+                    rec['hybrid_score'] = content_weight * cb_score + collaborative_weight * cf_score
+                raw_recommendations.sort(key=lambda x: x.get('hybrid_score', 0), reverse=True)
+                logger.info(f"Re-scored {len(raw_recommendations)} recommendations with manual weights: CB={content_weight}, CF={collaborative_weight}")
+
             # Filter recommendations by user's fitness level
             logger.info(f"Got {len(raw_recommendations)} raw recommendations, filtering by fitness level...")
 
