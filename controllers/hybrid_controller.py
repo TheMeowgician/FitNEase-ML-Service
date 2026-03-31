@@ -190,7 +190,7 @@ class HybridController:
 
     def _filter_by_fitness_level(self, recommendations: List[Dict], user_fitness_level: str,
                                   rf_predictor=None, num_recommendations: int = 10, user_profile: Dict = None,
-                                  progression_slots: int = 2) -> List[Dict]:
+                                  progression_slots: int = 2, beginner_progression_slots: int = 0) -> List[Dict]:
         """
         Filter and rank recommendations by user's fitness level using Random Forest ML model.
 
@@ -226,9 +226,17 @@ class HybridController:
         logger.info(f"[DEBUG] Incoming recommendations difficulty distribution: {difficulty_counts}")
         logger.info(f"[DEBUG] Target difficulty: {target_difficulty}, Exact matches: {len(exact_match)}")
 
-        # STRICT POLICY FOR BEGINNERS: Beginners should ONLY get beginner exercises
+        # BEGINNER POLICY: Primarily difficulty 1, with 0-2 difficulty 2 based on ratings
         if target_difficulty == 1:
-            filtered_recommendations = exact_match
+            if beginner_progression_slots > 0:
+                # Beginner earned progression — mix in difficulty 2 exercises
+                next_level = [r for r in recommendations if r.get('difficulty_level') == 2]
+                actual_progression = min(beginner_progression_slots, len(next_level), num_recommendations)
+                main_slots = num_recommendations - actual_progression
+                filtered_recommendations = exact_match[:main_slots] + next_level[:actual_progression]
+                logger.info(f"Beginner progressive mix: {min(main_slots, len(exact_match))} level-1 + {actual_progression} level-2 (beginner_progression_slots={beginner_progression_slots})")
+            else:
+                filtered_recommendations = exact_match
             if len(filtered_recommendations) < num_recommendations:
                 logger.warning(f"Only found {len(filtered_recommendations)} beginner exercises out of {num_recommendations} requested!")
                 logger.warning(f"This indicates the content-based model is not prioritizing beginner exercises.")
@@ -483,6 +491,42 @@ class HybridController:
                 except Exception as e:
                     logger.warning(f"Error computing progression slots: {e}, using default {progression_slots}")
 
+            # Calculate progression slots for beginner users (0 by default — no progression)
+            # Beginners can earn 1-2 intermediate (difficulty 2) exercise slots based on ratings.
+            # Priority: check ratings on difficulty-2 exercises first (from group workouts),
+            # then fall back to checking ratings on difficulty-1 exercises (too-easy signal).
+            beginner_progression_slots = 0
+            if user_fitness_level.lower() == 'beginner' and user_ratings and exercises:
+                try:
+                    exercise_diff_map = {e.get('exercise_id', e.get('id')): e.get('difficulty_level', 0) for e in exercises}
+                    # First: check if beginner has rated any difficulty-2 exercises (e.g. from group workouts)
+                    next_level_ratings = [
+                        rating for eid, rating in user_ratings.items()
+                        if exercise_diff_map.get(int(eid)) == 2
+                    ]
+                    if next_level_ratings:
+                        avg_next = sum(next_level_ratings) / len(next_level_ratings)
+                        if avg_next >= 4.0:
+                            beginner_progression_slots = 2
+                        elif avg_next >= 3.5:
+                            beginner_progression_slots = 1
+                        logger.info(f"User {user_id} (beginner) rated {len(next_level_ratings)} level-2 exercises (avg {avg_next:.1f}) -> {beginner_progression_slots} progression slots")
+                    else:
+                        # Fallback: check ratings on difficulty-1 exercises (high = too easy)
+                        current_level_ratings = [
+                            rating for eid, rating in user_ratings.items()
+                            if exercise_diff_map.get(int(eid)) == 1
+                        ]
+                        if current_level_ratings:
+                            avg_current = sum(current_level_ratings) / len(current_level_ratings)
+                            if avg_current >= 4.0:
+                                beginner_progression_slots = 1
+                            logger.info(f"User {user_id} (beginner) rated {len(current_level_ratings)} level-1 exercises (avg {avg_current:.1f}) -> {beginner_progression_slots} progression slots")
+                        else:
+                            logger.info(f"User {user_id} (beginner) has no ratings yet -> 0 progression slots")
+                except Exception as e:
+                    logger.warning(f"Error computing beginner progression slots: {e}, using default 0")
+
             # Prepare user profile for Random Forest prediction with behavioral data
             behavioral = self._extract_behavioral_features(user_history, user_ratings)
             rf_user_profile = {
@@ -507,7 +551,8 @@ class HybridController:
                 rf_predictor,
                 total_needed,  # Request enough for both primary and alternatives
                 rf_user_profile,
-                progression_slots=progression_slots
+                progression_slots=progression_slots,
+                beginner_progression_slots=beginner_progression_slots
             )
             logger.info(f"After filtering: {len(all_filtered_recommendations)} recommendations matching fitness level '{user_fitness_level}'")
 
